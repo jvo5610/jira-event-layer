@@ -1,10 +1,18 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tools.export_source import export
 from tools.e2e_live import rule_yaml
 from app.dsl import parse_rule
+
+
+def test_development_compose_uses_role_specific_healthchecks():
+    root = Path(__file__).resolve().parents[1]
+    services = yaml.safe_load((root / "compose.dev.yaml").read_text())["services"]
+    assert services["worker"]["healthcheck"]["test"] == ["CMD", "python", "-m", "app.health", "worker"]
+    assert services["migrate"]["healthcheck"]["disable"] is True
 
 
 def test_live_runner_emits_alias_free_rules_for_shared_bindings():

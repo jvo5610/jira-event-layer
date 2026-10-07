@@ -24,6 +24,8 @@ services:
   worker:
     build: .
     command: ["python", "-m", "app.worker"]
+    healthcheck:
+      test: [CMD, python, -m, app.health, worker]
     env_file: .env
     environment:
       DATABASE_URL: postgresql://automation:local-test-only@postgres:5432/automation
@@ -34,6 +36,7 @@ services:
   migrate:
     build: .
     command: ["python", "-m", "app.migrate"]
+    healthcheck: {disable: true}
     environment:
       DATABASE_URL: postgresql://automation:local-test-only@postgres:5432/automation
       TENANT_ID: development
