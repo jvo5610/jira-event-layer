@@ -1,7 +1,7 @@
 {
   "webhookEvent": "jira:issue_updated",
-  "issue": {"key": "DEMO-1", "fields": {
-    "project": {"key": "DEMO"}, "summary": "Automation API lab event",
+  "issue": {"key": "KAN-1", "fields": {
+    "project": {"key": "KAN"}, "summary": "Solicitud de repositorio",
     "labels": ["automation-lab-repository"], "status": {"name": "Done"}
   }},
   "changelog": {"items": [{"field": "status", "fromString": "In Progress", "toString": "Done"}]}

@@ -75,7 +75,7 @@ def test_all_published_yaml_examples_validate(example):
 
 def test_literal_field_pipeline_example():
     rule, _ = parse_rule(Path("examples/literal-field-repository.yaml").read_text())
-    event = {"issue": {"key": "DEMO-8", "fields": {"project": {"key": "DEMO"},
+    event = {"issue": {"key": "KAN-8", "fields": {"project": {"key": "KAN"},
              "labels": ["automation-lab-repository"], "summary": "New repository",
              "repository.name": [{"value": "service-payments"}]}}}
     assert match(rule, "jira", "jira:issue_updated", event)["matched"]
@@ -87,27 +87,16 @@ def test_literal_field_pipeline_example():
         render_action(rule.actions[0], event)
 
 
-def test_legacy_checksum_and_pipeline_body_are_unchanged():
-    import json
-    # Digest independently computed with the old engine at source commit 4d60b26.
-    old, digest = parse_rule(Path("tests/fixtures/legacy-repository-rule.yaml").read_text())
-    assert digest == "19a96eea0daff819be805dbcaad024ee162366a603687730e42ca7e9137155b7"
-    new, _ = parse_rule(EXAMPLE)
-    event = json.loads(Path("examples/jira-event.json").read_text())
-    assert match(old, "jira", event["webhookEvent"], event)["matched"] == match(new, "jira", event["webhookEvent"], event)["matched"]
-    assert render_action(old.actions[0], event) == render_action(new.actions[0], event)
-
-
 @pytest.mark.parametrize("key,from_id,to_id,expected", [
-    ("DEMO-4", "10000", "10001", False),
-    ("DEMO-4", "10001", "10003", True),
-    ("DEMO-1", "10001", "10003", False),
+    ("KAN-4", "10000", "10001", False),
+    ("KAN-4", "10001", "10003", True),
+    ("KAN-1", "10001", "10003", True),
 ])
 def test_explicit_status_id_mapping(key, from_id, to_id, expected):
     # Synthetic status-ID fixture. IDs are examples, not a remote environment dependency.
     rule, _ = parse_rule(Path("examples/status-id-repository.yaml").read_text())
     payload = {"issue": {"key": key, "fields": {
-        "project": {"key": "DEMO"}, "labels": ["automation-lab-repository"]}},
+        "project": {"key": "KAN"}, "labels": ["automation-lab-repository"]}},
         "changelog": {"items": [{"field": "status", "from": from_id, "to": to_id}]}}
     assert match(rule, "jira", "jira:issue_updated", payload)["matched"] is expected
 
@@ -121,7 +110,7 @@ def test_example():
     assert len(digest) == 64
     body = render_action(rule.actions[0], event)
     assert len(body["variables"]) == 7
-    assert body["variables"][-1]["value"] == "DEMO-1"
+    assert body["variables"][-1]["value"] == "KAN-1"
 
 
 @pytest.mark.parametrize("text", ["x: 1\nx: 2", "x: &x [1]\ny: *x", "x: !!python/object:os.system {}",
@@ -140,9 +129,9 @@ def test_unknown_keys_and_arbitrary_code():
 
 
 def test_typed_equality_and_missing():
-    assert not evaluate({"path": "/x", "op": "eq", "value": True}, {"x": 1})["matched"]
-    assert not evaluate({"path": "/x", "op": "ne", "value": "anything"}, {})["matched"]
-    assert evaluate({"path": "/x", "op": "exists", "value": False}, {})["matched"]
+    assert not evaluate({"path": "x", "op": "eq", "value": True}, {"x": 1})["matched"]
+    assert not evaluate({"path": "x", "op": "ne", "value": "anything"}, {})["matched"]
+    assert evaluate({"path": "x", "op": "exists", "value": False}, {})["matched"]
 
 
 @pytest.mark.parametrize("op,actual,expected,matched", [
@@ -151,17 +140,13 @@ def test_typed_equality_and_missing():
     ("gt", 2, 1, True), ("gte", 2, 2, True), ("lt", 3, 1, False), ("lte", 1, 1, True),
 ])
 def test_predicates(op, actual, expected, matched):
-    node = {"path": "/x", "op": op, "value": expected}
+    node = {"path": "x", "op": op, "value": expected}
     validate_filter(node)
     assert evaluate(node, {"x": actual})["matched"] == matched
 
 
-def test_json_pointer():
-    assert lookup({"a/b": [{"~": 2}]}, "/a~1b/0/~0") == 2
-
-
 def test_filter_budget():
-    node = {"some": {"path": "/items", "where": {"path": "", "op": "eq", "value": 2}}}
+    node = {"some": {"path": "items", "where": {"path": "", "op": "eq", "value": 2}}}
     with pytest.raises(RuleError):
         evaluate(node, {"items": [1]*10001})
 

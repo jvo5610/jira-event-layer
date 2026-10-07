@@ -45,10 +45,10 @@ def test_development_compose_uses_role_specific_healthchecks():
 
 
 def test_live_runner_emits_alias_free_rules_for_shared_bindings():
-    binding = {"path": "/_steps/0/key"}
+    binding = {"path": '_steps["0"].key'}
     spec = {"apiVersion": "automation/v1", "kind": "Rule", "name": "test-shared",
             "trigger": {"source": "test", "event": "automation.e2e"},
-            "when": {"path": "/test_id", "op": "exists"},
+            "when": {"path": "test_id", "op": "exists"},
             "actions": [{"type": "jira.issue.get", "issue": binding},
                         {"type": "jira.issue.get", "issue": binding}]}
     rule, _ = parse_rule(rule_yaml(spec))

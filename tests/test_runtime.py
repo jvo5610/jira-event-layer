@@ -84,7 +84,7 @@ def test_worker_uses_pinned_rule_identity_not_event_or_new_active_version(env):
 kind: Rule
 name: crear-repositorio
 trigger: {source: jira, event: "jira:issue_updated"}
-when: {path: /issue/key, op: exists}
+when: {path: issue.key, op: exists}
 actions:
   - type: jira.issue.create
     project: DEMO
@@ -92,7 +92,7 @@ actions:
     fields:
       summary: {value: Solicitud de repositorio}
   - type: jira.comment.add
-    issue: {path: /_steps/0/key}
+    issue: {path: '_steps["0"].key'}
     text: {value: Solicitud registrada}
 '''
     first = activate(client, text)

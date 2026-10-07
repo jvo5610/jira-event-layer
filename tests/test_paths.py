@@ -1,4 +1,4 @@
-"""Path grammar, type distinctions and compatibility/security boundaries."""
+"""Path grammar, type distinctions and security boundaries."""
 import json
 
 import pytest
@@ -26,10 +26,6 @@ from app.paths import compile_path
     ("false_field", {"false_field": False}, False),
     ("zero", {"zero": 0}, 0),
     ("__class__", {"__class__": "data only"}, "data only"),
-    ("/a~1b/0/~0", {"a/b": [{"~": 2}]}, 2),
-    ("/numeric/00", {"numeric": ["legacy zero"]}, "legacy zero"),
-    ("/literal.key", {"literal.key": 7}, 7),
-    ("/", {"": "pointer empty key"}, "pointer empty key"),
 ])
 def test_valid_paths(path, payload, expected):
     assert check_path(path) == path
@@ -44,7 +40,6 @@ def test_valid_paths(path, payload, expected):
     ('items["0"]', {"items": [1]}), ("items[0]", {"items": {"0": 1}}),
     ("items.name", {"items": [{"name": "not implicit fanout"}]}),
     ("__class__.__name__", "never Python attribute lookup"),
-    ("/items/²", {"items": [1]}),
 ])
 def test_missing_and_wrong_container_types(path, payload):
     assert lookup(payload, path) is MISSING
@@ -59,7 +54,8 @@ def test_missing_and_wrong_container_types(path, payload):
     r'issue["\ud800"]', r'issue["\udc00"]', 'issue["line\nbreak"]',
     "issue[*]", "issue[0:2]", "issue[0,1]", "issue[?(@.ok)]", "issue..*",
     "issue.get()", 'issue[__import__("os")]', "issue + other", "issue; code",
-    " issue", "issue ", "issue\x00key", "éclair", "a" * 501, "/a~2b",
+    " issue", "issue ", "issue\x00key", "éclair", "a" * 501,
+    "/issue/key", "/a~1b/0/~0", "/", "/a~2b",
 ])
 def test_invalid_paths_rejected_everywhere(path):
     with pytest.raises(RuleError):
@@ -91,12 +87,6 @@ def test_some_uses_current_item_and_distinguishes_null_from_missing():
     assert evaluate({"path": "", "op": "eq", "value": 2}, 2)["matched"]
 
 
-def test_pointer_and_field_paths_resolve_equally_without_rewriting():
-    payload = {"a/b": {"key.with.dot": [{"~": 9}]}}
-    assert lookup(payload, '/a~1b/key.with.dot/0/~0') == lookup(payload, '["a/b"]["key.with.dot"][0]["~"]') == 9
-    assert Binding(path="/a~1b/key.with.dot/0/~0").model_dump()["path"] == "/a~1b/key.with.dot/0/~0"
-
-
 def test_path_compilation_cache_is_bounded():
     for index in range(1100):
         check_path(f'fields["key{index}"]')
@@ -109,9 +99,8 @@ def test_literal_keys_roundtrip_using_json_string_escapes():
     for _ in range(100):
         key = ''.join(rng.choice('ab. /~[]"\\\n\t😀') for _ in range(rng.randrange(0, 20)))
         path = 'root[' + json.dumps(key) + '][0].value'
-        pointer = '/root/' + key.replace('~', '~0').replace('/', '~1') + '/0/value'
         payload = {"root": {key: [{"value": "data"}]}}
-        assert lookup(payload, path) == lookup(payload, pointer) == "data"
+        assert lookup(payload, path) == "data"
 
 
 def test_schema_describes_paths_in_bindings_filters_and_guards():

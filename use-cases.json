@@ -1,7 +1,7 @@
 {
   "as_of": "2026-10-07",
   "production_ready": false,
-  "runtime_release": "1.0.0 candidate; lab acceptance does not certify production",
+  "runtime_release": "1.0.0; production-equivalent acceptance is required for each deployed revision",
   "implemented_hardening": [
     "Portable image and hardened Compose with optional mounted secrets; no cloud dependency in runtime",
     "Deny-by-default connector allowlists; explicit immutable installation tenant",
@@ -11,8 +11,8 @@
     "Worker heartbeat, queue age metrics, graceful stop and shared connector write budgets",
     "Dedicated Jira actor suppression with replay prohibition (not general causal tracing)",
     "Bounded payload redaction preserving durable deduplication identifiers",
-    "Disposable container acceptance suite including backup/restore and legacy adoption",
-    "Bounded field paths with dots, quoted literal keys and array indexes; legacy JSON Pointer strings/checksums preserved"
+    "Disposable container acceptance suite including backup/restore and database upgrade adoption",
+    "Bounded v1 field paths with dots, quoted literal keys and array indexes; JSON Pointer notation is rejected"
   ],
   "scope": "Implementation inventory, not a claim of full Jira Automation parity",
   "references": [
@@ -41,7 +41,7 @@
       "id": "repository-pipeline",
       "status": "native_e2e_passed",
       "evidence": "48b45b8 on 2026-10-07: native Jira webhook with rule revision 2, Bitbucket pipeline #4 successful, negative filter and duplicate delivery passed. Rerun opt-in live suite for each release",
-      "limit": "Provisioning internals intentionally NO-OP"
+      "limit": "Pipeline executes in the isolated Fett repository; repository provisioning side effects remain outside this service"
     },
     {
       "id": "create-from-source",
@@ -107,7 +107,7 @@
     {
       "id": "use-created-card-in-next-step",
       "status": "live_api_e2e_passed",
-      "action": "Protected _steps[\"index\"].key result context (legacy /_steps/{index}/key supported)",
+      "action": "Protected _steps[\"index\"].key result context",
       "native_e2e": false
     },
     {

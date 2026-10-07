@@ -21,7 +21,7 @@ def action(kind="create", **kwargs):
         data.update(project="DEMO", issue_type_id="1")
         data.setdefault("fields", {"summary": {"value": "Solicitud de repositorio"}})
     return Rule.model_validate({"apiVersion": "automation/v1", "kind": "Rule", "name": "test-rule",
-        "trigger": {"source": "test", "event": "test"}, "when": {"path": "/x", "op": "exists"}, "actions": [data]}).actions[0]
+        "trigger": {"source": "test", "event": "test"}, "when": {"path": "x", "op": "exists"}, "actions": [data]}).actions[0]
 
 
 def adapter(labels=None):

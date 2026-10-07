@@ -22,7 +22,7 @@ def config():
 def rule_for(actions):
     return parse_rule(yaml.safe_dump({"apiVersion": "automation/v1", "kind": "Rule", "name": "jira-lab",
         "trigger": {"source": "jira", "event": "jira:issue_updated"},
-        "when": {"path": "/issue/key", "op": "exists"}, "actions": actions}))[0]
+        "when": {"path": "issue.key", "op": "exists"}, "actions": actions}))[0]
 
 
 def issue(key="DEMO-4", status="10001", labels=None):
@@ -32,13 +32,13 @@ def issue(key="DEMO-4", status="10001", labels=None):
 
 
 ACTIONS = [
-    {"type": "jira.issue.create", "project": "DEMO", "issue_type_id": "10003", "fields": {"summary": {"path": "/issue/fields/summary"}}},
+    {"type": "jira.issue.create", "project": "DEMO", "issue_type_id": "10003", "fields": {"summary": {"path": "issue.fields.summary"}}},
     {"type": "jira.issue.clone", "project": "DEMO", "issue_type_id": "10003", "source": {"value": "DEMO-4"}},
     {"type": "jira.issue.edit", "issue": {"value": "DEMO-4"}, "fields": {"summary": {"value": "New"}}},
     {"type": "jira.issue.transition", "issue": {"value": "DEMO-4"}, "from_status_id": "10001", "to_status_id": "10003"},
     {"type": "jira.comment.add", "issue": {"value": "DEMO-4"}, "text": {"value": "Comment"}},
     {"type": "jira.issue.link", "inward": {"value": "DEMO-4"}, "outward": {"value": "DEMO-5"}, "link_type_id": "10000"},
-    {"type": "jira.issue.get", "issue": {"value": "DEMO-4"}, "require": {"path": "/fields/status/id", "op": "eq", "value": "10001"}},
+    {"type": "jira.issue.get", "issue": {"value": "DEMO-4"}, "require": {"path": "fields.status.id", "op": "eq", "value": "10001"}},
 ]
 
 
@@ -245,6 +245,6 @@ def test_lifecycle_example_parses():
     from pathlib import Path
     rule, _ = parse_rule(Path("examples/jira-create-from-source.yaml").read_text())
     settings = config()
-    settings.allowed_jira_projects = ("DEMO",)
+    settings.allowed_jira_projects = ("KAN",)
     settings.check_targets(rule)
-    assert len(rule.actions) == 6
+    assert len(rule.actions) == 10

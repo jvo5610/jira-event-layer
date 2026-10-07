@@ -21,8 +21,8 @@ def setup(env, actions, handler):
     return client, store, settings, Worker(store, settings, jira=Jira(settings, httpx.Client(transport=httpx.MockTransport(handler))))
 
 
-@pytest.mark.parametrize("path", ["/_steps/0/key", '_steps["0"].key'])
-def test_create_then_comment_reuses_durable_step_result(env, path):
+def test_create_then_comment_reuses_durable_step_result(env):
+    path = '_steps["0"].key'
     requests = []
     def handler(request):
         requests.append(request)

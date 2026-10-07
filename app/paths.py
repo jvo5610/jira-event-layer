@@ -1,8 +1,4 @@
-"""Bounded field references, never expressions or Python attribute access.
-
-Preferred syntax: issue.fields["literal.key"][0].name. Legacy JSON Pointer
-references remain unchanged. Compiling never rewrites persisted rule strings.
-"""
+"""Bounded v1 field references, never expressions or Python attribute access."""
 from functools import lru_cache
 import json
 import re
@@ -15,15 +11,14 @@ PATH_DESCRIPTION = (
     'escapes supported), and [0] for zero-based array indexes. Indexes are '
     'nonnegative, without leading zeros. Inside some.where the root is the '
     'current item; inside jira.issue.get.require it is the fetched issue. '
-    'Empty string selects the current object. Legacy /issue/key JSON Pointers '
-    'are accepted. No expressions, functions, wildcards, slices or recursion.'
+    'Empty string selects the current object. No expressions, functions, '
+    'wildcards, slices, JSON Pointer notation or recursion.'
 )
 PATH_EXAMPLES = ['issue.fields.summary', 'this["some.value"].is_literal',
                  'issue.fields.components[0].name', '["Nombre del repositorio"]',
-                 '_steps["0"].key', '/issue/key', '']
+                 '_steps["0"].key', '']
 PATH_SYNTAX = {
-    "preferred": "field-reference",
-    "legacy": "json-pointer",
+    "syntax": "field-reference",
     "root": "implicit-current-object",
     "maxLength": MAX_PATH,
     "identifierPattern": "[A-Za-z_][A-Za-z0-9_]*",
@@ -54,12 +49,6 @@ def compile_path(path):
         raise PathError("Field paths must be strings of at most 500 characters")
     if path == "":
         return ()
-    if path.startswith("/"):
-        if re.search(r"~(?![01])", path):
-            raise PathError("Invalid JSON pointer escape")
-        # Preserve historical pointer tokens, including numeric object keys.
-        return tuple(("pointer", key.replace("~1", "/").replace("~0", "~"))
-                     for key in path[1:].split("/"))
     tokens, position = [], 0
     if not path.startswith("["):
         identifier = _IDENTIFIER.match(path, position)
@@ -101,17 +90,9 @@ def compile_path(path):
 def resolve(obj, path, missing):
     check_path(path)
     for kind, key in compile_path(path):
-        if isinstance(obj, dict) and kind != "index":
+        if isinstance(obj, dict) and kind == "key":
             obj = obj.get(key, missing)
-        elif isinstance(obj, list) and kind != "key":
-            if kind == "pointer":
-                # Preserve the previous pointer resolver's accepted numeric tokens.
-                if not key.isdigit():
-                    return missing
-                try:
-                    key = int(key)
-                except ValueError:
-                    return missing
+        elif isinstance(obj, list) and kind == "index":
             if key >= len(obj):
                 return missing
             obj = obj[key]

@@ -169,9 +169,7 @@ actions:
                 evaluated = client.post(admin_url + "/v1/evaluate", headers=auth,
                                         json={"yaml": text, "event_ids": event_ids}).json()
                 assert evaluated["executed"] is False and evaluated["results"][0]["trace"]["matched"]
-                compared = client.post(admin_url + "/v1/compare", headers=auth,
-                                       json={"left_yaml": text, "right_yaml": pointer, "event_ids": event_ids}).json()
-                assert compared["changed"] == 0 and compared["executed"] is False
+                assert client.post(admin_url + "/v1/rules/validate", content=pointer, headers=auth).status_code == 422
                 invalid = text.replace('["sample.data"][0].ok', 'sample[*]')
                 assert client.post(admin_url + "/v1/rules/validate", content=invalid, headers=auth).status_code == 422
                 command("docker", "restart", management)
@@ -180,7 +178,7 @@ actions:
                 restored = client.get(admin_url + "/v1/rules/literal-path-acceptance/versions/1", headers=auth).json()
                 assert restored["yaml"] == text and restored["sha256"] == revision["sha256"]
                 assert client.get(admin_url + "/v1/runs", headers=auth).json() == []
-                passed.append("field_paths_persist_compare_and_survive_restart_without_effects")
+                passed.append("v1_field_paths_persist_reject_json_pointer_and_survive_restart")
                 backup = command("docker", "exec", db, "pg_dump", "-U", "owner", "-d", "automation_test", "-Fc").stdout
                 command("docker", "exec", "-i", db, "pg_restore", "-U", "owner", "-d", "automation_restore", "--no-owner", "--no-privileges", input=backup)
                 one_shot("verify-restore", {**migration, "DATABASE_URL": owner_internal.replace("/automation_test", "/automation_restore")}, "python", "-m", "app.migrate")

@@ -1,8 +1,8 @@
-"""Opt-in API -> PostgreSQL -> worker -> real provider acceptance tests.
+"""Production-equivalent API -> PostgreSQL -> worker -> provider acceptance.
 
 Requires --allow-remote-writes and explicit provider credentials/targets. Creates
-labelled test issues and/or runs a configured NO-OP pipeline. Never edits existing
-issues or deletes remote evidence. No native webhook registration is changed.
+labelled isolated issues and runs the configured pipeline using the same actions,
+durability and provider APIs as the deployed service. Existing issues are not edited.
 """
 import argparse
 import json
@@ -141,7 +141,8 @@ def run(args):
                     action = {"type": "bitbucket.pipeline", "workspace": workspace, "repository": repository,
                               "branch": branch, "pipeline": pipeline,
                               "variables": {key: {"value": value} for key, value in {
-                                  "PROJECT_KEY": "E2E", "REPOSITORY_NAME": name, "DESCRIPTION": "Portable live E2E NO-OP",
+                                  "PROJECT_KEY": project if args.provider == "all" else "KAN", "REPOSITORY_NAME": name,
+                                  "DESCRIPTION": "Production-equivalent acceptance flow",
                                   "LANGUAGE": "python", "DEFAULT_REVIEWERS": "", "AWS_ACCOUNT_ID": "", "JIRA_ISSUE_KEY": "E2E-1"}.items()}}
                     run = execute_case(client, [action], "live-bitbucket", stamp + "-bb")
                     with httpx.Client(timeout=20, auth=(config["BITBUCKET_ACCOUNT_EMAIL"], config["BITBUCKET_API_TOKEN"])) as provider:

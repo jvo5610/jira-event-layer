@@ -1,16 +1,15 @@
-# Ejemplo de contrato; reemplazar proyecto, issue y IDs según la instalación.
-# Requiere conector Jira habilitado en servidor y etiqueta automation-managed
-# en DEMO-4. Verificar IDs de tipo/estados antes de activar en otro proyecto.
+# Flujo operativo para el proyecto KAN y sus IDs de tipo/estado verificados.
 apiVersion: automation/v1
 kind: Rule
 name: crear-ticket-por-cierre
 # Los tickets creados reciben automation-flujo-crear-ticket-por-cierre.
 # La versión y ejecución van en automation.operation, no en etiquetas.
-description: Crea, comenta, edita, transiciona y clona una tarjeta a partir del cierre de DEMO-4.
+description: Crea, comenta, edita, transiciona y clona una tarjeta al aprobar una solicitud KAN.
 trigger: {source: jira, event: "jira:issue_updated"}
 when:
   all:
-    - {path: issue.key, op: eq, value: DEMO-4}
+    - {path: issue.fields.project.key, op: eq, value: KAN}
+    - {path: issue.fields.labels, op: contains, value: automation-lab-repository}
     - some:
         path: changelog.items
         where:
@@ -23,7 +22,7 @@ actions:
     issue: "${issue.key}"
     require: {path: fields.status.id, op: eq, value: "10003"}
   - type: jira.issue.create
-    project: DEMO
+    project: KAN
     issue_type_id: "10003"
     fields:
       summary: "[Automation example] Ticket creado por el motor"
@@ -41,8 +40,21 @@ actions:
     to_status_id: "10001"
   - type: jira.issue.clone
     source: '${_steps["1"].key}'
-    project: DEMO
+    project: KAN
     issue_type_id: "10003"
     copy_fields: [summary, description]
     fields:
       summary: "[Automation example] Copia controlada del ticket"
+  - type: jira.issue.link
+    inward: '${_steps["1"].key}'
+    outward: '${_steps["5"].key}'
+    link_type_id: "10000"
+  - type: jira.issue.get
+    issue: '${_steps["1"].key}'
+    require: {path: fields.status.id, op: eq, value: "10001"}
+  - type: jira.issue.transition
+    issue: '${_steps["5"].key}'
+    to_status_id: "10001"
+  - type: jira.issue.get
+    issue: '${_steps["5"].key}'
+    require: {path: fields.status.id, op: eq, value: "10001"}

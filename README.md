@@ -74,22 +74,22 @@ Sin --full ejecuta la suite con Postgres real pero omite build/aceptación de co
 Para explorar la API local, `python3 tools/local_config.py` genera una configuración de desarrollo
 sin sobrescribir archivos y `docker compose -p automation-dev -f compose.dev.yaml up -d --build` arranca
 los servicios. Usar el ADMIN_TOKEN local para consultar /v1/schema. Esto es desarrollo, no producción.
-Los ejemplos usan destinos ficticios; reemplazarlos y habilitarlos explícitamente antes de activar reglas.
+Los ejemplos operativos están alineados con el tenant Fett: proyecto Jira `KAN` y repositorio
+Bitbucket `jvidelaolmos/jira-event-layer-lab`. La suite local usa dobles aislados y no llama proveedores.
 
 ## Pruebas con proveedores reales
 
-Son opt-in y separadas de la suite reproducible. Crear un proyecto/repositorio desechable y una
-credencial con permisos mínimos; nunca usar recursos productivos. El pipeline elegido debe ser NO-OP.
+Son opt-in y separadas de la suite reproducible. Usan los recursos operativos aislados de Fett y
+credenciales con permisos mínimos. Crean evidencia real en Jira y ejecutan el pipeline real de Bitbucket.
 
 ```sh
 uv run python tools/e2e_live.py --provider bitbucket --output work/e2e-bitbucket \
-  --bitbucket-repository example-workspace/automation-lab-provisioning \
+  --bitbucket-repository jvidelaolmos/jira-event-layer-lab \
   --bitbucket-branch main --bitbucket-pipeline setup-new-repository \
   --allow-remote-writes
 
-# IDs de ejemplo: reemplazarlos por los del proyecto desechable.
 uv run python tools/e2e_live.py --provider jira --output work/e2e-jira \
-  --jira-project DEMO --jira-issue-type-id 10001 \
+  --jira-project KAN --jira-issue-type-id 10003 \
   --jira-target-status-id 10003 --jira-link-type-id 10000 \
   --allow-remote-writes
 ```
@@ -209,7 +209,7 @@ La forma explícita sigue disponible: `{value: "${texto-literal}"}` no interpola
 `{path: issue.key, default: "..."}` permite un default. Objetos literales usan `{value: {...}}`.
 Las referencias funcionan en campos/variables y argumentos de acciones que aceptan bindings;
 no en nombres de repositorios, ramas, IDs de configuración o predicados `when`.
-Reglas anteriores conservan su representación normalizada y checksum; no se migran automáticamente.
+La versión 1 acepta únicamente esta sintaxis; los JSON Pointer históricos no son válidos.
 No hay eval, shell, Jinja, Python en YAML, URLs arbitrarias ni resolución de secretos desde reglas.
 64 KiB por YAML, sin aliases ni claves duplicadas, filtros con profundidad y presupuesto acotados.
 
@@ -246,15 +246,12 @@ ausente; un valor `null` existente sigue siendo presente para `exists`. Los bind
 Bitbucket usan `default` para ausente o null; sin él fallan antes de enviar la solicitud.
 Los bindings Jira conservan sus reglas de tipos y campos permitidos.
 
-Los JSON Pointers anteriores (`/issue/key`, `/_steps/0/key`, escapes `~0`/`~1`) siguen aceptados
-con su semántica previa. No se reescribe el YAML, su versión ni su checksum al leerlo.
-Cambiar voluntariamente la notación crea una revisión nueva, aunque seleccione el mismo dato.
+Las rutas JSON Pointer (`/issue/key`, `/_steps/0/key`) se rechazan antes de guardar la regla.
 `GET /v1/schema` describe la sintaxis en los bindings, filtros y guardas (`x-path-syntax`).
 
-Los ejemplos usan DEMO y example-workspace como destinos ficticios. Los nombres de transición son
-In Progress → Done; mapearlos a los valores reales antes de activar. El ejemplo por ID requiere IDs
-verificados en la instalación destino. El operador debe crear su propio pipeline de prueba NO-OP;
-no hay dependencia de un workspace privado ni se incluye provisioning AWS.
+Los ejemplos usan el proyecto `KAN`, los estados verificados `10001` → `10003`, el tipo `10003`,
+el vínculo `10000` y `jvidelaolmos/jira-event-layer-lab`. Esos recursos están aislados para Fett,
+pero los flujos y las llamadas son los mismos que en una operación productiva.
 
 ## Durabilidad e idempotencia
 

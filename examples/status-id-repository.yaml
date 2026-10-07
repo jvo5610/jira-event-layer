@@ -1,14 +1,13 @@
 apiVersion: automation/v1
 kind: Rule
 name: jira-repository-request
-description: Ejemplo con IDs de estados; reemplazar proyecto, ticket e IDs según la instalación.
+description: Solicitud aprobada por IDs estables dispara el pipeline de aprovisionamiento.
 trigger:
   source: jira
   event: jira:issue_updated
 when:
   all:
-    - {path: issue.fields.project.key, op: eq, value: DEMO}
-    - {path: issue.key, op: eq, value: DEMO-4}
+    - {path: issue.fields.project.key, op: eq, value: KAN}
     - {path: issue.fields.labels, op: contains, value: automation-lab-repository}
     - some:
         path: changelog.items
@@ -20,13 +19,13 @@ when:
             - {path: to, op: eq, value: "10003"}
 actions:
   - type: bitbucket.pipeline
-    workspace: example-workspace
-    repository: automation-lab-provisioning
+    workspace: jvidelaolmos
+    repository: jira-event-layer-lab
     branch: master
     pipeline: setup-new-repository
     variables:
-      PROJECT_KEY: WIL
-      REPOSITORY_NAME: lab-example
+      PROJECT_KEY: KAN
+      REPOSITORY_NAME: "${issue.key}"
       DESCRIPTION: "${issue.fields.summary}"
       LANGUAGE: python
       DEFAULT_REVIEWERS: ""

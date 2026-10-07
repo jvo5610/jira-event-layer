@@ -28,7 +28,7 @@ def env():
     if url.rsplit("/", 1)[-1] != "automation_test":
         raise RuntimeError("Tests require a dedicated automation_test database")
     settings = Settings(url, "a"*40, "b"*40, "lab@example.com", "fake-test-token",
-                        allowed_repositories=("example-workspace/automation-lab-provisioning",),
+                        allowed_repositories=("jvidelaolmos/jira-event-layer-lab",),
                         tenant="test-installation", jira_required_label="automation-lab-managed")
     migrate(url, settings.tenant)
     store = Store(url)
@@ -144,7 +144,7 @@ def test_disable_prevents_new_matches(env):
 
 def test_target_allowlist(env):
     client, _, _ = env
-    response = client.post("/v1/rules", content=YAML.replace("workspace: example-workspace", "workspace: other-company"))
+    response = client.post("/v1/rules", content=YAML.replace("workspace: jvidelaolmos", "workspace: other-company"))
     assert response.status_code == 422
 
 
@@ -226,11 +226,10 @@ def test_two_workers_claim_once(env):
     assert sum(r is not None for r in claims) == 1
 
 
-@pytest.mark.parametrize("legacy", [False, True])
-def test_literal_field_and_array_paths_reach_pipeline_from_signed_webhook(env, legacy):
+def test_literal_field_and_array_paths_reach_pipeline_from_signed_webhook(env):
     client, store, settings = env
     spec = yaml.safe_load(YAML)
-    literal = '/issue/fields/repository.name/0/value' if legacy else 'issue.fields["repository.name"][0].value'
+    literal = 'issue.fields["repository.name"][0].value'
     spec["actions"][0]["variables"]["REPOSITORY_NAME"] = {"path": literal}
     spec["when"]["all"].append({"path": literal, "op": "eq", "value": "service-payments"})
     rule = activate(client, yaml.safe_dump(spec))
@@ -262,23 +261,6 @@ def test_literal_field_and_array_paths_reach_pipeline_from_signed_webhook(env, l
     restored = client.get(f'/v1/rules/{rule["name"]}/versions/1').json()
     assert restored["sha256"] == rule["sha256"]
     assert restored["spec"]["actions"][0]["variables"]["REPOSITORY_NAME"]["path"] == literal
-
-
-def test_old_revision_preserved_when_new_path_notation_is_saved(env):
-    client, _, _ = env
-    legacy = YAML.replace("issue.fields.project.key", "/issue/fields/project/key")
-    first = activate(client, legacy)
-    second = client.post("/v1/rules", content=YAML).json()
-    assert first["version"] == 1 and second["version"] == 2
-    assert first["sha256"] != second["sha256"]
-    old = client.get('/v1/rules/jira-repository-request/versions/1').json()
-    assert old["yaml"] == legacy and old["sha256"] == first["sha256"]
-    assert old["spec"]["when"]["all"][0]["path"] == "/issue/fields/project/key"
-    event = ingest(client)
-    assert event["runs"][0]["version"] == 1
-    comparison = client.post("/v1/compare", json={"left_yaml": legacy, "right_yaml": YAML, "event_ids": [event["event_id"]]})
-    assert comparison.status_code == 200 and comparison.json()["changed"] == 0
-    assert comparison.json()["executed"] is False
 
 
 @pytest.mark.parametrize("location", ["filter", "binding", "guard"])

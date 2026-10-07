@@ -1,5 +1,4 @@
-# Contract example: replace the project/repository and map the source field to
-# your real Jira event. "repository.name" here is one literal object key.
+# "repository.name" is one literal object key from the incoming Jira payload.
 apiVersion: automation/v1
 kind: Rule
 name: repositorio-desde-campo-literal
@@ -7,18 +6,18 @@ description: Extract a literal key and array element into a NO-OP pipeline input
 trigger: {source: jira, event: "jira:issue_updated"}
 when:
   all:
-    - {path: issue.fields.project.key, op: eq, value: DEMO}
+    - {path: issue.fields.project.key, op: eq, value: KAN}
     - {path: issue.fields.labels, op: contains, value: automation-lab-repository}
     - path: 'issue.fields["repository.name"][0].value'
       op: exists
 actions:
   - type: bitbucket.pipeline
-    workspace: example-workspace
-    repository: automation-lab-provisioning
+    workspace: jvidelaolmos
+    repository: jira-event-layer-lab
     branch: master
     pipeline: setup-new-repository
     variables:
-      PROJECT_KEY: "${issue.fields.project.key}"
+      PROJECT_KEY: KAN
       REPOSITORY_NAME: '${issue.fields["repository.name"][0].value}'
       DESCRIPTION: "${issue.fields.summary}"
       LANGUAGE: python

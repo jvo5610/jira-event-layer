@@ -1,7 +1,7 @@
 apiVersion: automation/v1
 kind: Rule
 name: jira-repository-request
-description: Transición del ticket de laboratorio dispara el pipeline NO-OP real.
+description: Una solicitud aprobada en Jira dispara el pipeline de aprovisionamiento.
 trigger:
   source: jira
   event: jira:issue_updated
@@ -9,7 +9,7 @@ when:
   all:
     - path: issue.fields.project.key
       op: eq
-      value: DEMO
+      value: KAN
     - path: issue.fields.labels
       op: contains
       value: automation-lab-repository
@@ -22,13 +22,13 @@ when:
             - {path: toString, op: eq, value: Done}
 actions:
   - type: bitbucket.pipeline
-    workspace: example-workspace
-    repository: automation-lab-provisioning
+    workspace: jvidelaolmos
+    repository: jira-event-layer-lab
     branch: master
     pipeline: setup-new-repository
     variables:
-      PROJECT_KEY: WIL
-      REPOSITORY_NAME: lab-example
+      PROJECT_KEY: KAN
+      REPOSITORY_NAME: "${issue.key}"
       DESCRIPTION: "${issue.fields.summary}"
       LANGUAGE: python
       DEFAULT_REVIEWERS: ""
