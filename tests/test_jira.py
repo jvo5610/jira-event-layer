@@ -74,6 +74,25 @@ def test_all_actions_roundtrip_and_dispatch(spec):
         assert body["properties"][0]["value"] == IDENTITY.provenance()
 
 
+def test_jira_field_binding_and_current_issue_guard_accept_new_paths():
+    spec = {"type": "jira.issue.create", "project": "DEMO", "issue_type_id": "10003",
+            "fields": {"summary": {"path": 'issue.fields["summary.source"][0].text'}}}
+    calls = []
+    def create(request):
+        calls.append(json.loads(request.content))
+        return httpx.Response(201, json={"key": "DEMO-6", "id": "77"})
+    payload = {"issue": {"fields": {"summary.source": [{"text": "Copied safely"}]}}}
+    adapter = Jira(config(), httpx.Client(transport=httpx.MockTransport(create)))
+    adapter.execute(rule_for([spec]).actions[0], payload, IDENTITY, lambda: None)
+    assert calls[0]["fields"]["summary"] == "Copied safely"
+    guard = {"type": "jira.issue.get", "issue": {"path": "issue.key"},
+             "require": {"path": "fields.status.id", "op": "eq", "value": "10001"}}
+    adapter = Jira(config(), httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=issue()))))
+    # The webhook says done, but require must read the fetched issue's current state.
+    result = adapter.execute(rule_for([guard]).actions[0], {"issue": issue(status="10003")}, IDENTITY, lambda: pytest.fail("read only"))
+    assert result["guard_matched"] is True
+
+
 @pytest.mark.parametrize("key", ["OTHER-1", "DEMO-1/../../x", "https://evil.test", "DEMO-01", "DEMO-1?x=y"])
 def test_reject_target_before_any_request(key):
     spec = {"type": "jira.comment.add", "issue": {"value": key}, "text": {"value": "hello"}}

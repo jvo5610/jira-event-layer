@@ -10,37 +10,37 @@ description: Crea, comenta, edita, transiciona y clona una tarjeta a partir del 
 trigger: {source: jira, event: "jira:issue_updated"}
 when:
   all:
-    - {path: /issue/key, op: eq, value: DEMO-4}
+    - {path: issue.key, op: eq, value: DEMO-4}
     - some:
-        path: /changelog/items
+        path: changelog.items
         where:
           all:
-            - {path: /field, op: eq, value: status}
-            - {path: /from, op: eq, value: "10001"}
-            - {path: /to, op: eq, value: "10003"}
+            - {path: field, op: eq, value: status}
+            - {path: from, op: eq, value: "10001"}
+            - {path: to, op: eq, value: "10003"}
 actions:
   - type: jira.issue.get
-    issue: {path: /issue/key}
-    require: {path: /fields/status/id, op: eq, value: "10003"}
+    issue: {path: issue.key}
+    require: {path: fields.status.id, op: eq, value: "10003"}
   - type: jira.issue.create
     project: DEMO
     issue_type_id: "10003"
     fields:
       summary: {value: "[Automation example] Ticket creado por el motor"}
-      description: {path: /issue/fields/summary}
+      description: {path: issue.fields.summary}
   - type: jira.comment.add
-    issue: {path: /_steps/1/key}
+    issue: {path: '_steps["1"].key'}
     text: {value: "Ticket creado a partir del cierre de la solicitud de laboratorio."}
   - type: jira.issue.edit
-    issue: {path: /_steps/1/key}
+    issue: {path: '_steps["1"].key'}
     fields:
       summary: {value: "[Automation example] Ticket actualizado por el motor"}
   - type: jira.issue.transition
-    issue: {path: /_steps/1/key}
+    issue: {path: '_steps["1"].key'}
     from_status_id: "10000"
     to_status_id: "10001"
   - type: jira.issue.clone
-    source: {path: /_steps/1/key}
+    source: {path: '_steps["1"].key'}
     project: DEMO
     issue_type_id: "10003"
     copy_fields: [summary, description]

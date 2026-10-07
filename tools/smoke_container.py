@@ -119,7 +119,8 @@ def main():
             passed.append("legacy_upgrade_preserves_events")
 
             common = {"TENANT_ID": "portable-smoke", "DATABASE_URL": runtime_internal}
-            management = container("api", {**common, "API_SURFACE": "management", "ADMIN_TOKEN": admin_token}, port=8080)
+            management = container("api", {**common, "API_SURFACE": "management", "ADMIN_TOKEN": admin_token,
+                                           "ALLOWED_JIRA_PROJECTS": "DEMO"}, port=8080)
             ingress = container("webhooks", {**common, "API_SURFACE": "webhooks", "JIRA_WEBHOOK_SECRET": hook_secret}, port=8080)
             worker = container("worker", common, "python", "-m", "app.worker")
             admin_url = f"http://127.0.0.1:{port_of(management, 8080)}"
@@ -138,7 +139,7 @@ def main():
                 assert client.get(ingress_url + "/v1/schema", headers=auth).status_code == 404
                 assert client.post(admin_url + "/webhooks/jira").status_code == 404
                 passed.append("management_and_webhook_network_isolation")
-                raw = b'{"webhookEvent":"jira:issue_updated","issue":{"key":"TEST-1"}}'
+                raw = b'{"webhookEvent":"jira:issue_updated","issue":{"key":"TEST-1"},"sample.data":[{"ok":true}]}'
                 headers = {"X-Atlassian-Webhook-Identifier": "acceptance-event",
                            "X-Hub-Signature": "sha256=" + hmac.new(hook_secret.encode(), raw, hashlib.sha256).hexdigest()}
                 assert client.post(ingress_url + "/webhooks/jira", content=raw).status_code == 401
@@ -150,6 +151,36 @@ def main():
                 eventually(lambda: client.get(ingress_url + "/readyz").status_code == 200)
                 assert client.post(ingress_url + "/webhooks/jira", content=raw, headers=headers).json()["duplicate"]
                 passed.append("signed_ingress_and_deduplication_survive_restart")
+                # Exercise the shipped image's grammar, not just an in-process parser.
+                text = '''apiVersion: automation/v1
+kind: Rule
+name: literal-path-acceptance
+trigger: {source: jira, event: "jira:issue_updated"}
+when: {path: '["sample.data"][0].ok', op: eq, value: true}
+actions:
+  - type: jira.issue.get
+    issue: {path: issue.key}
+'''
+                pointer = text.replace('["sample.data"][0].ok', '/sample.data/0/ok')
+                response = client.post(admin_url + "/v1/rules", content=text, headers=auth)
+                assert response.status_code == 201
+                revision = response.json()
+                event_ids = [first.json()["event_id"]]
+                evaluated = client.post(admin_url + "/v1/evaluate", headers=auth,
+                                        json={"yaml": text, "event_ids": event_ids}).json()
+                assert evaluated["executed"] is False and evaluated["results"][0]["trace"]["matched"]
+                compared = client.post(admin_url + "/v1/compare", headers=auth,
+                                       json={"left_yaml": text, "right_yaml": pointer, "event_ids": event_ids}).json()
+                assert compared["changed"] == 0 and compared["executed"] is False
+                invalid = text.replace('["sample.data"][0].ok', 'sample[*]')
+                assert client.post(admin_url + "/v1/rules/validate", content=invalid, headers=auth).status_code == 422
+                command("docker", "restart", management)
+                admin_url = f"http://127.0.0.1:{port_of(management, 8080)}"
+                eventually(lambda: client.get(admin_url + "/readyz").status_code == 200)
+                restored = client.get(admin_url + "/v1/rules/literal-path-acceptance/versions/1", headers=auth).json()
+                assert restored["yaml"] == text and restored["sha256"] == revision["sha256"]
+                assert client.get(admin_url + "/v1/runs", headers=auth).json() == []
+                passed.append("field_paths_persist_compare_and_survive_restart_without_effects")
                 backup = command("docker", "exec", db, "pg_dump", "-U", "owner", "-d", "automation_test", "-Fc").stdout
                 command("docker", "exec", "-i", db, "pg_restore", "-U", "owner", "-d", "automation_restore", "--no-owner", "--no-privileges", input=backup)
                 one_shot("verify-restore", {**migration, "DATABASE_URL": owner_internal.replace("/automation_test", "/automation_restore")}, "python", "-m", "app.migrate")
@@ -171,6 +202,15 @@ def main():
             override.write_text(json.dumps({"networks": {"default": {"external": True, "name": name}}}))
             compose = ["docker", "compose", "--project-name", name + "-compose", "--env-file", config,
                        "-f", str(Path("compose.yaml").resolve()), "-f", str(override)]
+            def compose_diagnostic():
+                diagnostic = command(*compose, "ps", "-a", check=False).stdout.decode(errors="replace")
+                diagnostic += command(*compose, "logs", "--no-color", "--tail", "20", check=False).stdout.decode(errors="replace")
+                sensitive = [db_password, runtime_password, admin_token, hook_secret]
+                sensitive += [p.read_text().strip() for p in secret_directory.iterdir()]
+                for value in sensitive:
+                    if value:
+                        diagnostic = diagnostic.replace(value, "[redacted]")
+                return diagnostic[-5000:]
             try:
                 started = command(*compose, "up", "-d", "--no-build", check=False)
                 if started.returncode:
@@ -192,6 +232,8 @@ def main():
                     assert client.get("http://" + public_address + "/v1/schema").status_code == 404
                     eventually(lambda: command(*compose, "exec", "-T", "worker", "python", "-m", "app.health", "worker", check=False).returncode == 0)
                 passed.append("shipped_compose_installation_and_mounted_secrets")
+            except RuntimeError as exc:
+                raise RuntimeError(str(exc) + "\nCompose diagnostics:\n" + compose_diagnostic()) from None
             finally:
                 command(*compose, "down", "--volumes", "--timeout", "20", check=False)
             print(json.dumps({"passed": passed, "provider_calls": 0, "image": args.image}, indent=2))

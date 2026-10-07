@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from app.paths import MAX_PATH, PATH_DESCRIPTION, PATH_EXAMPLES, PATH_SYNTAX, PathError, check_path as validate_path, resolve
 
 MAX_YAML = 65536
 MISSING = object()
@@ -42,8 +43,12 @@ class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
+FieldPath = Annotated[str, Field(max_length=MAX_PATH, description=PATH_DESCRIPTION,
+                                examples=PATH_EXAMPLES, json_schema_extra={"x-path-syntax": PATH_SYNTAX})]
+
+
 class Binding(Strict):
-    path: str | None = None
+    path: FieldPath | None = None
     value: str | None = None
     default: str | None = None
 
@@ -83,7 +88,7 @@ class Action(Strict):
 
 
 class ValueBinding(Strict):
-    path: str | None = None
+    path: FieldPath | None = None
     value: Any = None
 
     @model_validator(mode="before")
@@ -168,7 +173,9 @@ class JiraGet(Strict):
     type: Literal["jira.issue.get"]
     issue: Binding
     # Guard evaluated against the current issue, not the webhook snapshot.
-    require: dict | None = None
+    require: dict | None = Field(default=None, description="Filter over the fetched current Jira issue, not the event. " + PATH_DESCRIPTION,
+                                examples=[{"path": "fields.status.id", "op": "eq", "value": "10003"}],
+                                json_schema_extra={"x-path-syntax": PATH_SYNTAX})
 
     @model_validator(mode="after")
     def valid_guard(self):
@@ -192,7 +199,10 @@ class Rule(Strict):
     name: str = Field(pattern=r"^[a-z][a-z0-9-]{2,79}$", description="Stable, meaningful rule slug. Created Jira issues receive automation-flujo-<name>; renaming creates a different rule.")
     description: str = Field(default="", max_length=2000)
     trigger: Trigger
-    when: dict
+    when: dict = Field(description="Filter over the triggering event; some.where uses the current list item. " + PATH_DESCRIPTION,
+                       examples=[{"path": "issue.fields.project.key", "op": "eq", "value": "DEMO"},
+                                 {"some": {"path": "changelog.items", "where": {"path": "field", "op": "eq", "value": "status"}}}],
+                       json_schema_extra={"x-path-syntax": PATH_SYNTAX})
     actions: list[RuleAction] = Field(min_length=1, max_length=10)
 
     @model_validator(mode="after")
@@ -202,24 +212,17 @@ class Rule(Strict):
 
 
 def check_path(path):
-    if not isinstance(path, str) or len(path) > 500 or (path and not path.startswith("/")):
-        raise RuleError("Paths must be JSON pointers, e.g. /issue/key")
-    if re.search(r"~(?![01])", path):
-        raise RuleError("Invalid JSON pointer escape")
+    try:
+        return validate_path(path)
+    except PathError as exc:
+        raise RuleError(str(exc)) from None
 
 
 def lookup(obj, path):
-    if path == "":
-        return obj
-    for key in path[1:].split("/"):
-        key = key.replace("~1", "/").replace("~0", "~")
-        if isinstance(obj, dict):
-            obj = obj.get(key, MISSING)
-        elif isinstance(obj, list) and key.isdigit() and int(key) < len(obj):
-            obj = obj[int(key)]
-        else:
-            return MISSING
-    return obj
+    try:
+        return resolve(obj, path, MISSING)
+    except PathError as exc:
+        raise RuleError(str(exc)) from None
 
 
 def validate_filter(node, depth=0, budget=None):

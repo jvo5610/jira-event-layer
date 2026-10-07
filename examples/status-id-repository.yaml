@@ -7,17 +7,17 @@ trigger:
   event: jira:issue_updated
 when:
   all:
-    - {path: /issue/fields/project/key, op: eq, value: DEMO}
-    - {path: /issue/key, op: eq, value: DEMO-4}
-    - {path: /issue/fields/labels, op: contains, value: automation-lab-repository}
+    - {path: issue.fields.project.key, op: eq, value: DEMO}
+    - {path: issue.key, op: eq, value: DEMO-4}
+    - {path: issue.fields.labels, op: contains, value: automation-lab-repository}
     - some:
-        path: /changelog/items
+        path: changelog.items
         where:
           all:
-            - {path: /field, op: eq, value: status}
+            - {path: field, op: eq, value: status}
             # En curso -> Finalizado, matched by stable IDs rather than labels.
-            - {path: /from, op: eq, value: "10001"}
-            - {path: /to, op: eq, value: "10003"}
+            - {path: from, op: eq, value: "10001"}
+            - {path: to, op: eq, value: "10003"}
 actions:
   - type: bitbucket.pipeline
     workspace: example-workspace
@@ -27,8 +27,8 @@ actions:
     variables:
       PROJECT_KEY: {value: WIL}
       REPOSITORY_NAME: {value: lab-example}
-      DESCRIPTION: {path: /issue/fields/summary}
+      DESCRIPTION: {path: issue.fields.summary}
       LANGUAGE: {value: python}
       DEFAULT_REVIEWERS: {value: ""}
       AWS_ACCOUNT_ID: {value: ""}
-      JIRA_ISSUE_KEY: {path: /issue/key}
+      JIRA_ISSUE_KEY: {path: issue.key}

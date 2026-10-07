@@ -31,6 +31,8 @@ def test_source_export_excludes_private_state(tmp_path):
     files = export(Path(__file__).resolve().parents[1], destination)
     assert "Dockerfile" in files and "tools/selftest.py" in files
     assert "app/migrations/001_initial.sql" in files
+    assert "app/paths.py" in files and "tests/test_paths.py" in files
+    assert "examples/literal-field-repository.yaml" in files
     assert not (destination / ".git").exists()
     assert not (destination / ".env").exists()
     assert not (destination / "tools/lab").exists()

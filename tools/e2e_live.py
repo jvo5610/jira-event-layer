@@ -42,7 +42,7 @@ def required(name):
 def execute_case(client, actions, label, marker, timeout=240):
     spec = {"apiVersion": "automation/v1", "kind": "Rule", "name": label,
             "trigger": {"source": "test", "event": "automation.e2e"},
-            "when": {"path": "/test_id", "op": "eq", "value": marker}, "actions": actions}
+            "when": {"path": "test_id", "op": "eq", "value": marker}, "actions": actions}
     saved = client.post("/v1/rules", content=rule_yaml(spec), headers={"Content-Type": "application/yaml"})
     saved.raise_for_status()
     version = saved.json()
@@ -155,7 +155,7 @@ def run(args):
                                            "deduplication": "passed", "negative_filter": "passed"})
                     print("Real Bitbucket pipeline succeeded; duplicate and negative cases passed", flush=True)
                 if args.provider in {"jira", "all"}:
-                    source = {"path": "/_steps/0/key"}
+                    source = {"path": '_steps["0"].key'}
                     flow_name = "prueba-ciclo-de-tickets"
                     fields = {"summary": {"value": "[Prueba de automatizacion] Ticket original"},
                               "description": {"value": "Created only by the portable E2E worker"},
@@ -167,13 +167,13 @@ def run(args):
                         {"type": "jira.issue.transition", "issue": source, "to_status_id": status},
                         {"type": "jira.issue.clone", "source": source, "project": project, "issue_type_id": issue_type,
                          "copy_fields": ["summary", "description", "labels"], "fields": {"summary": {"value": "[Prueba de automatizacion] Copia del ticket original"}}},
-                        {"type": "jira.issue.link", "inward": source, "outward": {"path": "/_steps/4/key"}, "link_type_id": link_type},
-                        {"type": "jira.issue.get", "issue": source, "require": {"path": "/fields/status/id", "op": "eq", "value": status}},
+                        {"type": "jira.issue.link", "inward": source, "outward": {"path": '_steps["4"].key'}, "link_type_id": link_type},
+                        {"type": "jira.issue.get", "issue": source, "require": {"path": "fields.status.id", "op": "eq", "value": status}},
                         # Transition the clone only after checking the original's current status.
-                        {"type": "jira.issue.transition", "issue": {"path": "/_steps/4/key"}, "to_status_id": status},
-                        {"type": "jira.issue.transition", "issue": {"path": "/_steps/4/key"}, "to_status_id": status},
-                        {"type": "jira.issue.get", "issue": {"path": "/_steps/4/key"},
-                         "require": {"path": "/fields/status/id", "op": "eq", "value": status}}
+                        {"type": "jira.issue.transition", "issue": {"path": '_steps["4"].key'}, "to_status_id": status},
+                        {"type": "jira.issue.transition", "issue": {"path": '_steps["4"].key'}, "to_status_id": status},
+                        {"type": "jira.issue.get", "issue": {"path": '_steps["4"].key'},
+                         "require": {"path": "fields.status.id", "op": "eq", "value": status}}
                     ]
                     run = execute_case(client, actions, flow_name, stamp + "-jira")
                     results = {str(row["step"]): row["detail"]["result"] for row in run["log"]
@@ -202,7 +202,7 @@ def run(args):
                     assert results["9"]["guard_matched"]
                     stopped = execute_case(client, [
                         {"type": "jira.issue.get", "issue": {"value": created},
-                         "require": {"path": "/fields/status/id", "op": "eq", "value": "never-matching-status"}},
+                         "require": {"path": "fields.status.id", "op": "eq", "value": "never-matching-status"}},
                         {"type": "jira.comment.add", "issue": {"value": created},
                          "text": {"value": "SHOULD NOT EXECUTE"}}
                     ], "prueba-validar-condicion", stamp + "-guard")

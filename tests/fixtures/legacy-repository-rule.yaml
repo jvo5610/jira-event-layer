@@ -1,3 +1,4 @@
+# Frozen pre-field-path fixture. Its canonical checksum must not change.
 apiVersion: automation/v1
 kind: Rule
 name: jira-repository-request
@@ -7,19 +8,19 @@ trigger:
   event: jira:issue_updated
 when:
   all:
-    - path: issue.fields.project.key
+    - path: /issue/fields/project/key
       op: eq
       value: DEMO
-    - path: issue.fields.labels
+    - path: /issue/fields/labels
       op: contains
       value: automation-lab-repository
     - some:
-        path: changelog.items
+        path: /changelog/items
         where:
           all:
-            - {path: field, op: eq, value: status}
-            - {path: fromString, op: eq, value: In Progress}
-            - {path: toString, op: eq, value: Done}
+            - {path: /field, op: eq, value: status}
+            - {path: /fromString, op: eq, value: In Progress}
+            - {path: /toString, op: eq, value: Done}
 actions:
   - type: bitbucket.pipeline
     workspace: example-workspace
@@ -29,8 +30,8 @@ actions:
     variables:
       PROJECT_KEY: {value: WIL}
       REPOSITORY_NAME: {value: lab-example}
-      DESCRIPTION: {path: issue.fields.summary}
+      DESCRIPTION: {path: /issue/fields/summary}
       LANGUAGE: {value: python}
       DEFAULT_REVIEWERS: {value: ""}
       AWS_ACCOUNT_ID: {value: ""}
-      JIRA_ISSUE_KEY: {path: issue.key}
+      JIRA_ISSUE_KEY: {path: /issue/key}

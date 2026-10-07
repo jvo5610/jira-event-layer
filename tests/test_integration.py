@@ -7,6 +7,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 from app.config import Settings
@@ -223,3 +224,78 @@ def test_two_workers_claim_once(env):
     with ThreadPoolExecutor(max_workers=2) as pool:
         claims = list(pool.map(lambda w: w.claim(), workers))
     assert sum(r is not None for r in claims) == 1
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_literal_field_and_array_paths_reach_pipeline_from_signed_webhook(env, legacy):
+    client, store, settings = env
+    spec = yaml.safe_load(YAML)
+    literal = '/issue/fields/repository.name/0/value' if legacy else 'issue.fields["repository.name"][0].value'
+    spec["actions"][0]["variables"]["REPOSITORY_NAME"] = {"path": literal}
+    spec["when"]["all"].append({"path": literal, "op": "eq", "value": "service-payments"})
+    rule = activate(client, yaml.safe_dump(spec))
+    payload = json.loads(json.dumps(EVENT))
+    payload["issue"]["fields"]["repository.name"] = [{"value": "service-payments"}]
+    raw = json.dumps(payload).encode()
+    headers = {"X-Atlassian-Webhook-Identifier": "literal-path-delivery",
+               "X-Hub-Signature": "sha256=" + hmac.new(settings.webhook_secret.encode(), raw, hashlib.sha256).hexdigest()}
+    first = client.post("/webhooks/jira", content=raw, headers=headers)
+    assert first.status_code == 202 and len(first.json()["runs"]) == 1
+    duplicate = client.post("/webhooks/jira", content=raw, headers=headers)
+    assert duplicate.json()["duplicate"]
+    calls = []
+    def handler(request):
+        calls.append(request.method)
+        if request.method == "POST":
+            variables = {v["key"]: v["value"] for v in json.loads(request.content)["variables"]}
+            assert variables["REPOSITORY_NAME"] == "service-payments"
+            assert variables["JIRA_ISSUE_KEY"] == payload["issue"]["key"]
+            return httpx.Response(201, json={"uuid": "{literal-path-pipeline}"})
+        return httpx.Response(200, json={"uuid": "{literal-path-pipeline}", "state": {"name": "COMPLETED", "result": {"name": "SUCCESSFUL"}}})
+    worker = worker_for(store, settings, handler)
+    assert worker.tick()
+    with store.pool.connection() as conn:
+        conn.execute("UPDATE runs SET next_at=now()")
+    assert worker.tick() and not worker.tick()
+    assert calls == ["POST", "GET"]
+    assert client.get("/v1/runs").json()[0]["status"] == "succeeded"
+    restored = client.get(f'/v1/rules/{rule["name"]}/versions/1').json()
+    assert restored["sha256"] == rule["sha256"]
+    assert restored["spec"]["actions"][0]["variables"]["REPOSITORY_NAME"]["path"] == literal
+
+
+def test_old_revision_preserved_when_new_path_notation_is_saved(env):
+    client, _, _ = env
+    legacy = YAML.replace("issue.fields.project.key", "/issue/fields/project/key")
+    first = activate(client, legacy)
+    second = client.post("/v1/rules", content=YAML).json()
+    assert first["version"] == 1 and second["version"] == 2
+    assert first["sha256"] != second["sha256"]
+    old = client.get('/v1/rules/jira-repository-request/versions/1').json()
+    assert old["yaml"] == legacy and old["sha256"] == first["sha256"]
+    assert old["spec"]["when"]["all"][0]["path"] == "/issue/fields/project/key"
+    event = ingest(client)
+    assert event["runs"][0]["version"] == 1
+    comparison = client.post("/v1/compare", json={"left_yaml": legacy, "right_yaml": YAML, "event_ids": [event["event_id"]]})
+    assert comparison.status_code == 200 and comparison.json()["changed"] == 0
+    assert comparison.json()["executed"] is False
+
+
+@pytest.mark.parametrize("location", ["filter", "binding", "guard"])
+def test_path_syntax_rejected_before_api_persistence(env, location):
+    client, store, settings = env
+    spec = yaml.safe_load(YAML)
+    if location == "filter":
+        spec["when"]["all"][0]["path"] = "issue[*]"
+    elif location == "binding":
+        spec["actions"][0]["variables"]["DESCRIPTION"] = {"path": "issue.get()"}
+    else:
+        settings.allowed_jira_projects = ("DEMO",)
+        spec["actions"] = [{"type": "jira.issue.get", "issue": {"value": "DEMO-1"},
+                            "require": {"path": '$.fields.status', "op": "exists"}}]
+    text = yaml.safe_dump(spec)
+    for endpoint in ("/v1/rules/validate", "/v1/rules"):
+        assert client.post(endpoint, content=text).status_code == 422
+    assert client.post("/v1/evaluate", json={"yaml": text, "payload": EVENT}).status_code == 422
+    assert store.query("SELECT count(*) n FROM rules")[0]["n"] == 0
+    assert client.get("/v1/runs").json() == []

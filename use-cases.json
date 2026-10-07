@@ -1,7 +1,7 @@
 {
-  "as_of": "2026-10-06",
+  "as_of": "2026-10-07",
   "production_ready": false,
-  "runtime_release": "0.2.0 candidate, not deployed",
+  "runtime_release": "0.2.0 candidate; lab acceptance does not certify production",
   "implemented_hardening": [
     "Portable image and hardened Compose with optional mounted secrets; no cloud dependency in runtime",
     "Deny-by-default connector allowlists; explicit immutable installation tenant",
@@ -11,7 +11,8 @@
     "Worker heartbeat, queue age metrics, graceful stop and shared connector write budgets",
     "Dedicated Jira actor suppression with replay prohibition (not general causal tracing)",
     "Bounded payload redaction preserving durable deduplication identifiers",
-    "Disposable container acceptance suite including backup/restore and legacy adoption"
+    "Disposable container acceptance suite including backup/restore and legacy adoption",
+    "Bounded field paths with dots, quoted literal keys and array indexes; legacy JSON Pointer strings/checksums preserved"
   ],
   "scope": "Implementation inventory, not a claim of full Jira Automation parity",
   "references": [
@@ -21,6 +22,13 @@
     "https://support.atlassian.com/cloud-automation/docs/jira-automation-branches/"
   ],
   "cases": [
+    {
+      "id": "field-paths-with-literal-keys-and-arrays",
+      "status": "unit_and_postgres_integration_passed",
+      "action": "Filters, some.where, Jira bindings/guards and Bitbucket variables use the same bounded resolver",
+      "native_e2e": false,
+      "limit": "Field references only, not full JSONPath; no expressions, functions, wildcards, slices or recursive search"
+    },
     {
       "id": "readable-flow-labels-and-provenance",
       "status": "unit_and_postgres_integration_passed",
@@ -97,7 +105,7 @@
     {
       "id": "use-created-card-in-next-step",
       "status": "live_api_e2e_passed",
-      "action": "Protected /_steps/{index}/key result context",
+      "action": "Protected _steps[\"index\"].key result context (legacy /_steps/{index}/key supported)",
       "native_e2e": false
     },
     {

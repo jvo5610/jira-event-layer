@@ -21,7 +21,8 @@ def setup(env, actions, handler):
     return client, store, settings, Worker(store, settings, jira=Jira(settings, httpx.Client(transport=httpx.MockTransport(handler))))
 
 
-def test_create_then_comment_reuses_durable_step_result(env):
+@pytest.mark.parametrize("path", ["/_steps/0/key", '_steps["0"].key'])
+def test_create_then_comment_reuses_durable_step_result(env, path):
     requests = []
     def handler(request):
         requests.append(request)
@@ -29,7 +30,7 @@ def test_create_then_comment_reuses_durable_step_result(env):
             assert "/issue/DEMO-6" in request.url.path
             return httpx.Response(200, json=issue("DEMO-6"))
         return httpx.Response(201, json={"key": "DEMO-6", "id": "78"})
-    comment = {"type": "jira.comment.add", "issue": {"path": "/_steps/0/key"}, "text": {"value": "Created from source"}}
+    comment = {"type": "jira.comment.add", "issue": {"path": path}, "text": {"value": "Created from source"}}
     client, store, settings, worker = setup(env, [ACTIONS[0], comment], handler)
     event = ingest(client, payload={"issue": issue(), "_steps": {"0": {"key": "OTHER-1"}}})
     assert worker.tick()

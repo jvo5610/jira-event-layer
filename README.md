@@ -177,11 +177,50 @@ Ingesta: {"source":"jira","event_type":"jira:issue_updated","payload":{...}}.
 
 Ver examples/repository-request.yaml. DSL automation/v1 / Rule; name identifica una regla.
 Trigger source+event y when con all/any/not/some. Predicados: eq/ne/in/contains/exists/gt/gte/lt/lte.
-Paths son JSON pointers (/issue/key, /changelog/items). some evalúa where sobre elementos de una lista.
+Paths son referencias relativas al objeto leído, sin prefijo `$`: `issue.key`, `changelog.items`.
+`some` evalúa `where` sobre cada elemento de la lista, no sobre el evento completo.
 Igualdad tipada: true no equivale a 1. Un campo ausente no satisface ne; usar exists explícitamente.
-Las variables de acciones son literales {value: "..."} o referencias {path: /issue/key, default: "..."}.
+Las variables de acciones son literales {value: "..."} o referencias {path: issue.key, default: "..."}.
 No hay eval, shell, Jinja, Python en YAML, URLs arbitrarias ni resolución de secretos desde reglas.
 64 KiB por YAML, sin aliases ni claves duplicadas, filtros con profundidad y presupuesto acotados.
+
+### Referencias a campos (`path`)
+
+```yaml
+# Campos anidados: puntos entre identificadores.
+path: issue.fields.summary
+
+# Una clave literal puede contener puntos, espacios, barras o símbolos.
+path: 'this["some.value"].is_literal'
+path: 'issue.fields["Nombre del repositorio"]'
+
+# Índices de listas: enteros no negativos, comenzando en cero.
+path: issue.fields.components[0].name
+
+# Una clave numérica de un objeto es una cadena, no un índice.
+path: '_steps["0"].key'
+```
+
+Cada `path` parte del objeto que se está leyendo. Normalmente es el evento; en `some.where`
+es el elemento actual y en `jira.issue.get.require` es el ticket consultado a Jira.
+`this` no es una palabra especial: solo usarla si existe esa clave. `path: ""` selecciona
+el objeto actual completo. Campos simples usan `[A-Za-z_][A-Za-z0-9_]*`; cualquier otra clave,
+incluidas claves Unicode o vacías, usa `["..."]`. Las comillas dobles interiores siguen los
+escapes de cadenas JSON (`\"`, `\\`, `\uXXXX`); las simples exteriores pertenecen a YAML.
+
+No es JSONPath completo: no acepta `$`, funciones, comodines, slices, índices negativos,
+filtros dentro de corchetes ni búsquedas recursivas. No usa `eval` ni acceso a atributos Python.
+Un path tiene como máximo 500 caracteres y se valida antes de guardar/activar.
+Una clave literal numérica (`["0"]`) solo accede a objetos; `[0]` solo accede a listas.
+Una referencia válida pero ausente, fuera de rango o sobre un tipo incompatible se considera
+ausente; un valor `null` existente sigue siendo presente para `exists`. Los bindings de
+Bitbucket usan `default` para ausente o null; sin él fallan antes de enviar la solicitud.
+Los bindings Jira conservan sus reglas de tipos y campos permitidos.
+
+Los JSON Pointers anteriores (`/issue/key`, `/_steps/0/key`, escapes `~0`/`~1`) siguen aceptados
+con su semántica previa. No se reescribe el YAML, su versión ni su checksum al leerlo.
+Cambiar voluntariamente la notación crea una revisión nueva, aunque seleccione el mismo dato.
+`GET /v1/schema` describe la sintaxis en los bindings, filtros y guardas (`x-path-syntax`).
 
 Los ejemplos usan DEMO y example-workspace como destinos ficticios. Los nombres de transición son
 In Progress → Done; mapearlos a los valores reales antes de activar. El ejemplo por ID requiere IDs
@@ -214,7 +253,9 @@ no hay dependencia de un workspace privado ni se incluye provisioning AWS.
 - jira.issue.link: vincular dos tarjetas administradas mediante un ID de tipo de vínculo.
 - jira.issue.get: leer la tarjeta actual y, opcionalmente, detener la secuencia si no cumple require.
 
-Resultados de pasos previos: /_steps/0/key, /_steps/1/fields/status/id, etc. El contexto lo construye el worker
+Resultados de pasos previos: `_steps["0"].key`, `_steps["1"].fields.status.id`, etc. `_steps`
+es un objeto de resultados por clave numérica, no una lista; se conserva por compatibilidad.
+El contexto lo construye el worker
 desde Postgres; un evento entrante no puede sobrescribirlo. Las cadenas se reanudan desde el paso pendiente.
 Ejemplo: examples/jira-create-from-source.yaml (borrador, nunca activado automáticamente).
 

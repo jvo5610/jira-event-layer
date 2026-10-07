@@ -8,6 +8,36 @@ from app.dsl import RuleError, evaluate, lookup, match, parse_rule, render_actio
 EXAMPLE = Path("examples/repository-request.yaml").read_text()
 
 
+@pytest.mark.parametrize("example", sorted(Path("examples").glob("*.yaml")))
+def test_all_published_yaml_examples_validate(example):
+    parse_rule(example.read_text())
+
+
+def test_literal_field_pipeline_example():
+    rule, _ = parse_rule(Path("examples/literal-field-repository.yaml").read_text())
+    event = {"issue": {"key": "DEMO-8", "fields": {"project": {"key": "DEMO"},
+             "labels": ["automation-lab-repository"], "summary": "New repository",
+             "repository.name": [{"value": "service-payments"}]}}}
+    assert match(rule, "jira", "jira:issue_updated", event)["matched"]
+    body = render_action(rule.actions[0], event)
+    assert {v["key"]: v["value"] for v in body["variables"]}["REPOSITORY_NAME"] == "service-payments"
+    event["issue"]["fields"]["repository.name"] = []
+    assert not match(rule, "jira", "jira:issue_updated", event)["matched"]
+    with pytest.raises(RuleError):
+        render_action(rule.actions[0], event)
+
+
+def test_legacy_checksum_and_pipeline_body_are_unchanged():
+    import json
+    # Digest independently computed with the old engine at source commit 4d60b26.
+    old, digest = parse_rule(Path("tests/fixtures/legacy-repository-rule.yaml").read_text())
+    assert digest == "19a96eea0daff819be805dbcaad024ee162366a603687730e42ca7e9137155b7"
+    new, _ = parse_rule(EXAMPLE)
+    event = json.loads(Path("examples/jira-event.json").read_text())
+    assert match(old, "jira", event["webhookEvent"], event)["matched"] == match(new, "jira", event["webhookEvent"], event)["matched"]
+    assert render_action(old.actions[0], event) == render_action(new.actions[0], event)
+
+
 @pytest.mark.parametrize("key,from_id,to_id,expected", [
     ("DEMO-4", "10000", "10001", False),
     ("DEMO-4", "10001", "10003", True),
