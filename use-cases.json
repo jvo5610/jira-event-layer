@@ -1,0 +1,167 @@
+{
+  "as_of": "2026-10-06",
+  "production_ready": false,
+  "runtime_release": "0.2.0 candidate, not deployed",
+  "implemented_hardening": [
+    "Portable image and hardened Compose with optional mounted secrets; no cloud dependency in runtime",
+    "Deny-by-default connector allowlists; explicit immutable installation tenant",
+    "Transactional checksummed migrations; no startup DDL and fail-closed schema compatibility",
+    "Separate reader/writer/operator/admin service permissions and role audit attribution",
+    "Independent management and webhook network surfaces",
+    "Worker heartbeat, queue age metrics, graceful stop and shared connector write budgets",
+    "Dedicated Jira actor suppression with replay prohibition (not general causal tracing)",
+    "Bounded payload redaction preserving durable deduplication identifiers",
+    "Disposable container acceptance suite including backup/restore and legacy adoption"
+  ],
+  "scope": "Implementation inventory, not a claim of full Jira Automation parity",
+  "references": [
+    "https://support.atlassian.com/cloud-automation/docs/jira-automation-triggers/",
+    "https://support.atlassian.com/cloud-automation/docs/jira-automation-actions/",
+    "https://support.atlassian.com/cloud-automation/docs/jira-automation-conditions/",
+    "https://support.atlassian.com/cloud-automation/docs/jira-automation-branches/"
+  ],
+  "cases": [
+    {
+      "id": "readable-flow-labels-and-provenance",
+      "status": "unit_and_postgres_integration_passed",
+      "native_e2e": false,
+      "limit": "Updated live runner verifies labels/provenance; not rerun against Jira after this change. No automatic historical migration."
+    },
+    {
+      "id": "repository-pipeline",
+      "status": "native_e2e_passed",
+      "evidence": "Historical lab acceptance; rerun opt-in live suite for each release",
+      "limit": "Provisioning internals intentionally NO-OP"
+    },
+    {
+      "id": "create-from-source",
+      "status": "live_api_e2e_passed",
+      "action": "jira.issue.create",
+      "native_e2e": false,
+      "limit": "Live test creates from literal fields; selected-field copying verified through clone"
+    },
+    {
+      "id": "create-subtask",
+      "status": "implemented_http_mocked",
+      "action": "jira.issue.create with parent",
+      "native_e2e": false,
+      "limit": "Requires verified subtask issue type ID"
+    },
+    {
+      "id": "clone-selected-fields",
+      "status": "live_api_e2e_passed",
+      "action": "jira.issue.clone",
+      "native_e2e": false,
+      "limit": "No attachments, links, comments or forms copied automatically"
+    },
+    {
+      "id": "edit-copy-fields",
+      "status": "live_api_e2e_passed",
+      "action": "jira.issue.edit",
+      "native_e2e": false
+    },
+    {
+      "id": "assign-user",
+      "status": "implemented_http_mocked",
+      "action": "jira.issue.edit with assignee object",
+      "native_e2e": false,
+      "limit": "No round-robin, workload balancing or user discovery yet"
+    },
+    {
+      "id": "transition-related-card",
+      "status": "live_api_e2e_passed",
+      "action": "jira.issue.transition",
+      "native_e2e": false,
+      "limit": "Single target key or reference; no bulk branch"
+    },
+    {
+      "id": "comment",
+      "status": "live_api_e2e_passed",
+      "action": "jira.comment.add",
+      "native_e2e": false,
+      "limit": "Plain text converted to ADF; visibility restrictions not exposed"
+    },
+    {
+      "id": "link-two-cards",
+      "status": "live_api_e2e_passed",
+      "action": "jira.issue.link",
+      "native_e2e": false
+    },
+    {
+      "id": "guard-on-current-related-status",
+      "status": "live_api_e2e_passed",
+      "action": "jira.issue.get with require",
+      "native_e2e": false,
+      "limit": "False guard stops the remaining sequence; no else branch"
+    },
+    {
+      "id": "use-created-card-in-next-step",
+      "status": "live_api_e2e_passed",
+      "action": "Protected /_steps/{index}/key result context",
+      "native_e2e": false
+    },
+    {
+      "id": "all-children-done-close-parent",
+      "status": "planned",
+      "needs": [
+        "bounded related-issue lookup",
+        "aggregate conditions",
+        "concurrency strategy"
+      ]
+    },
+    {
+      "id": "jql-lookup-and-foreach",
+      "status": "planned",
+      "needs": [
+        "scoped JQL validation",
+        "bounded pagination",
+        "fanout budget",
+        "per-target durable action identity"
+      ]
+    },
+    {
+      "id": "if-else-action-branches",
+      "status": "planned"
+    },
+    {
+      "id": "schedule-delay-sla",
+      "status": "planned"
+    },
+    {
+      "id": "created-comment-linked-webhook-triggers",
+      "status": "planned",
+      "limit": "Webhook currently subscribed only to issue_updated; normalization and E2E needed"
+    },
+    {
+      "id": "bitbucket-push-pr-build-triggers",
+      "status": "planned"
+    },
+    {
+      "id": "jsm-requests-approvals-assets-forms",
+      "status": "planned",
+      "limit": "Personal KAN project is software, not JSM"
+    },
+    {
+      "id": "sprints-versions-worklogs-attachments",
+      "status": "planned"
+    },
+    {
+      "id": "slack-github-argocd-aws-actions",
+      "status": "planned"
+    }
+  ],
+  "production_gates": [
+    "Native E2E tests per action and business case in an explicitly authorized test installation",
+    "Dedicated least-privilege identity and credential rotation",
+    "Complete schemas and documented API errors after functionality stabilizes",
+    "Per-user identity if required; service-role separation is implemented but is not user RBAC",
+    "Causal loop prevention; write budget is only a containment measure",
+    "Jira-specific read-only reconciliation for ambiguous results; no blind retry",
+    "Concurrent changes and event ordering policy; preflight is not atomic with Jira writes",
+    "Injected crash and load tests against deployed workers",
+    "Validated backups/restores, TLS certificate verification, retention and alerts",
+    "Production upgrade rehearsal; versioned migrations and compatibility checks are implemented",
+    "Private registry, signed image/SBOM and full image vulnerability review",
+    "Kubernetes/ECS platform acceptance if those deployments are distributed"
+  ]
+}

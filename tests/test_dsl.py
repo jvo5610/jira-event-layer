@@ -1,0 +1,85 @@
+from pathlib import Path
+
+import pytest
+import yaml
+
+from app.dsl import RuleError, evaluate, lookup, match, parse_rule, render_action, validate_filter
+
+EXAMPLE = Path("examples/repository-request.yaml").read_text()
+
+
+@pytest.mark.parametrize("key,from_id,to_id,expected", [
+    ("DEMO-4", "10000", "10001", False),
+    ("DEMO-4", "10001", "10003", True),
+    ("DEMO-1", "10001", "10003", False),
+])
+def test_explicit_status_id_mapping(key, from_id, to_id, expected):
+    # Synthetic status-ID fixture. IDs are examples, not a remote environment dependency.
+    rule, _ = parse_rule(Path("examples/status-id-repository.yaml").read_text())
+    payload = {"issue": {"key": key, "fields": {
+        "project": {"key": "DEMO"}, "labels": ["automation-lab-repository"]}},
+        "changelog": {"items": [{"field": "status", "from": from_id, "to": to_id}]}}
+    assert match(rule, "jira", "jira:issue_updated", payload)["matched"] is expected
+
+
+def test_example():
+    import json
+    rule, digest = parse_rule(EXAMPLE)
+    event = json.loads(Path("examples/jira-event.json").read_text())
+    assert match(rule, "jira", event["webhookEvent"], event)["matched"]
+    assert not match(rule, "test", event["webhookEvent"], event)["matched"]
+    assert len(digest) == 64
+    body = render_action(rule.actions[0], event)
+    assert len(body["variables"]) == 7
+    assert body["variables"][-1]["value"] == "DEMO-1"
+
+
+@pytest.mark.parametrize("text", ["x: 1\nx: 2", "x: &x [1]\ny: *x", "x: !!python/object:os.system {}",
+                                 "x: .nan", "x: 2026-10-06", "["*30 + "0" + "]"*30, "x"*65537])
+def test_unsafe_yaml(text):
+    with pytest.raises(RuleError):
+        parse_rule(text)
+
+
+def test_unknown_keys_and_arbitrary_code():
+    for field, value in [("shell", "touch /tmp/no"), ("url", "http://localhost")]:
+        raw = yaml.safe_load(EXAMPLE)
+        raw["actions"][0][field] = value
+        with pytest.raises(RuleError):
+            parse_rule(yaml.safe_dump(raw))
+
+
+def test_typed_equality_and_missing():
+    assert not evaluate({"path": "/x", "op": "eq", "value": True}, {"x": 1})["matched"]
+    assert not evaluate({"path": "/x", "op": "ne", "value": "anything"}, {})["matched"]
+    assert evaluate({"path": "/x", "op": "exists", "value": False}, {})["matched"]
+
+
+@pytest.mark.parametrize("op,actual,expected,matched", [
+    ("eq", "a", "a", True), ("ne", "a", "b", True), ("in", "a", ["a"], True),
+    ("contains", ["lab"], "lab", True), ("contains", "hello", "ell", True),
+    ("gt", 2, 1, True), ("gte", 2, 2, True), ("lt", 3, 1, False), ("lte", 1, 1, True),
+])
+def test_predicates(op, actual, expected, matched):
+    node = {"path": "/x", "op": op, "value": expected}
+    validate_filter(node)
+    assert evaluate(node, {"x": actual})["matched"] == matched
+
+
+def test_json_pointer():
+    assert lookup({"a/b": [{"~": 2}]}, "/a~1b/0/~0") == 2
+
+
+def test_filter_budget():
+    node = {"some": {"path": "/items", "where": {"path": "", "op": "eq", "value": 2}}}
+    with pytest.raises(RuleError):
+        evaluate(node, {"items": [1]*10001})
+
+
+def test_render_missing_never_interpolates_code():
+    rule, _ = parse_rule(EXAMPLE)
+    with pytest.raises(RuleError):
+        render_action(rule.actions[0], {})
+    value = "$(touch /tmp/never); {{ secrets.token }}"
+    body = render_action(rule.actions[0], {"issue": {"key": "DEMO-1", "fields": {"summary": value}}})
+    assert body["variables"][2]["value"] == value

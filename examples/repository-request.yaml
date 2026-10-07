@@ -1,0 +1,36 @@
+apiVersion: automation/v1
+kind: Rule
+name: jira-repository-request
+description: Transición del ticket de laboratorio dispara el pipeline NO-OP real.
+trigger:
+  source: jira
+  event: jira:issue_updated
+when:
+  all:
+    - path: /issue/fields/project/key
+      op: eq
+      value: DEMO
+    - path: /issue/fields/labels
+      op: contains
+      value: automation-lab-repository
+    - some:
+        path: /changelog/items
+        where:
+          all:
+            - {path: /field, op: eq, value: status}
+            - {path: /fromString, op: eq, value: In Progress}
+            - {path: /toString, op: eq, value: Done}
+actions:
+  - type: bitbucket.pipeline
+    workspace: example-workspace
+    repository: automation-lab-provisioning
+    branch: master
+    pipeline: setup-new-repository
+    variables:
+      PROJECT_KEY: {value: WIL}
+      REPOSITORY_NAME: {value: lab-example}
+      DESCRIPTION: {path: /issue/fields/summary}
+      LANGUAGE: {value: python}
+      DEFAULT_REVIEWERS: {value: ""}
+      AWS_ACCOUNT_ID: {value: ""}
+      JIRA_ISSUE_KEY: {path: /issue/key}

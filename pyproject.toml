@@ -1,0 +1,23 @@
+[project]
+name = "jira-event-layer"
+version = "0.2.0"
+description = "Portable, deterministic Jira event processing with YAML rules and durable PostgreSQL execution"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115,<1", "uvicorn>=0.34,<1", "psycopg[binary,pool]>=3.2,<4",
+  "PyYAML>=6.0.2,<7", "httpx>=0.28,<1", "pydantic>=2.10,<3"
+]
+
+[project.urls]
+Repository = "https://github.com/jvo5610/jira-event-layer"
+Issues = "https://github.com/jvo5610/jira-event-layer/issues"
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

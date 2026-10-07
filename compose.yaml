@@ -1,0 +1,112 @@
+# Portable installation; PostgreSQL is supplied by the operator.
+# Use compose.dev.yaml explicitly for the disposable development database.
+x-runtime: &runtime
+  image: ${AUTOMATION_IMAGE:-automation-api:0.2.0}
+  build: .
+  user: "10001:10001"
+  read_only: true
+  tmpfs: ["/tmp:size=16m,mode=1777"]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 128
+  mem_limit: 512m
+  cpus: 1.0
+  restart: unless-stopped
+  stop_grace_period: 150s
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "3"}
+
+x-environment: &environment
+  TENANT_ID: ${TENANT_ID:?Set a stable TENANT_ID for this installation}
+  DATABASE_URL_FILE: /run/secrets/database_url
+  ALLOWED_REPOSITORIES: ${ALLOWED_REPOSITORIES:-}
+  ALLOWED_JIRA_PROJECTS: ${ALLOWED_JIRA_PROJECTS:-}
+  JIRA_REQUIRED_LABEL: ${JIRA_REQUIRED_LABEL:-automation-managed}
+  JIRA_IGNORED_ACTOR_IDS: ${JIRA_IGNORED_ACTOR_IDS:-}
+  BITBUCKET_EMAIL: ${BITBUCKET_EMAIL:-}
+  BITBUCKET_TOKEN_FILE: /run/secrets/bitbucket_token
+  JIRA_EMAIL: ${JIRA_EMAIL:-}
+  JIRA_TOKEN_FILE: /run/secrets/jira_token
+  JIRA_CLOUD_ID: ${JIRA_CLOUD_ID:-}
+  JIRA_MAX_DAILY_WRITES: ${JIRA_MAX_DAILY_WRITES:-100}
+  BITBUCKET_MAX_DAILY_WRITES: ${BITBUCKET_MAX_DAILY_WRITES:-100}
+
+services:
+  migrate:
+    <<: *runtime
+    restart: "no"
+    command: [python, -m, app.migrate]
+    environment:
+      TENANT_ID: ${TENANT_ID:?Set TENANT_ID}
+      DATABASE_URL_FILE: /run/secrets/migration_database_url
+    secrets: [migration_database_url]
+    healthcheck: {disable: true}
+  api:
+    <<: *runtime
+    environment:
+      <<: *environment
+      API_SURFACE: management
+      ADMIN_TOKEN_FILE: /run/secrets/admin_token
+      READER_TOKEN_FILE: /run/secrets/reader_token
+      WRITER_TOKEN_FILE: /run/secrets/writer_token
+      OPERATOR_TOKEN_FILE: /run/secrets/operator_token
+    secrets: [database_url, admin_token, reader_token, writer_token, operator_token, bitbucket_token, jira_token]
+    ports: ["127.0.0.1:${ADMIN_PORT:-8088}:8080"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, python, -m, app.health, api]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+  webhooks:
+    <<: *runtime
+    environment:
+      TENANT_ID: ${TENANT_ID:?Set TENANT_ID}
+      DATABASE_URL_FILE: /run/secrets/database_url
+      API_SURFACE: webhooks
+      JIRA_WEBHOOK_SECRET_FILE: /run/secrets/jira_webhook_secret
+      JIRA_IGNORED_ACTOR_IDS: ${JIRA_IGNORED_ACTOR_IDS:-}
+    secrets: [database_url, jira_webhook_secret]
+    ports: ["127.0.0.1:${WEBHOOK_PORT:-8089}:8080"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, python, -m, app.health, api]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+  worker:
+    <<: *runtime
+    command: [python, -m, app.worker]
+    environment: *environment
+    secrets: [database_url, bitbucket_token, jira_token]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, python, -m, app.health, worker]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+secrets:
+  database_url:
+    file: ${AUTOMATION_SECRETS_DIR:-./secrets}/database_url
+  migration_database_url:
+    file: ${AUTOMATION_SECRETS_DIR:-./secrets}/migration_database_url
+  admin_token:
+    file: ${AUTOMATION_SECRETS_DIR:-./secrets}/admin_token
+  reader_token:
+    file: ${AUTOMATION_SECRETS_DIR:-./secrets}/reader_token
+  writer_token:
+    file: ${AUTOMATION_SECRETS_DIR:-./secrets}/writer_token
+  operator_token:
+    file: ${AUTOMATION_SECRETS_DIR:-./secrets}/operator_token
+  jira_webhook_secret:
+    file: ${AUTOMATION_SECRETS_DIR:-./secrets}/jira_webhook_secret
+  bitbucket_token:
+    file: ${AUTOMATION_SECRETS_DIR:-./secrets}/bitbucket_token
+  jira_token:
+    file: ${AUTOMATION_SECRETS_DIR:-./secrets}/jira_token

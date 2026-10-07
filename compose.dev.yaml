@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: automation
+      POSTGRES_USER: automation
+      POSTGRES_PASSWORD: local-test-only
+    ports: ["127.0.0.1:55439:5432"]
+    volumes: ["automation-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U automation"]
+      interval: 2s
+      retries: 20
+  api:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://automation:local-test-only@postgres:5432/automation
+      TENANT_ID: development
+    ports: ["127.0.0.1:8088:8080"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+  worker:
+    build: .
+    command: ["python", "-m", "app.worker"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://automation:local-test-only@postgres:5432/automation
+      TENANT_ID: development
+    depends_on:
+      postgres: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+  migrate:
+    build: .
+    command: ["python", "-m", "app.migrate"]
+    environment:
+      DATABASE_URL: postgresql://automation:local-test-only@postgres:5432/automation
+      TENANT_ID: development
+    depends_on:
+      postgres: {condition: service_healthy}
+volumes:
+  automation-data:
