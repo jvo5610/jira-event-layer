@@ -27,18 +27,20 @@
       "status": "unit_and_postgres_integration_passed",
       "action": "Filters, some.where, Jira bindings/guards and Bitbucket variables use the same bounded resolver",
       "native_e2e": false,
+      "evidence": "48b45b8 on 2026-10-07: 244 tests, 9 Docker acceptance checks, real Jira/Bitbucket API E2E. Native webhook passed with dot references; literal keys/arrays passed effect-free evaluation, not native Jira fields",
       "limit": "Field references only, not full JSONPath; no expressions, functions, wildcards, slices or recursive search"
     },
     {
       "id": "readable-flow-labels-and-provenance",
       "status": "unit_and_postgres_integration_passed",
       "native_e2e": false,
-      "limit": "Updated live runner verifies labels/provenance; not rerun against Jira after this change. No automatic historical migration."
+      "evidence": "Real Jira API acceptance passed on 2026-10-07 at 48b45b8, including flow labels/provenance; not a native webhook test",
+      "limit": "No automatic historical migration."
     },
     {
       "id": "repository-pipeline",
       "status": "native_e2e_passed",
-      "evidence": "Historical lab acceptance; rerun opt-in live suite for each release",
+      "evidence": "48b45b8 on 2026-10-07: native Jira webhook with rule revision 2, Bitbucket pipeline #4 successful, negative filter and duplicate delivery passed. Rerun opt-in live suite for each release",
       "limit": "Provisioning internals intentionally NO-OP"
     },
     {

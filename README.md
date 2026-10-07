@@ -124,8 +124,14 @@ verificadas contra proveedores reales desde la API autenticada. El flujo nativo 
 se volvió a verificar el 2026-10-07 desde una instalación vacía basada en el commit dfdebe2:
 transición real → webhook firmado → persistencia → regla YAML → pipeline NO-OP exitoso.
 También pasaron el filtro negativo, la entrega duplicada y evaluate/compare sin efectos externos.
-La instalación limpia completó 147 tests y 8 controles de aceptación Docker. Esta evidencia de
-laboratorio no certifica producción ni sustituye las pruebas de la instalación de cada operador.
+La actualización de sintaxis del commit 48b45b8 completó 244 tests y 9 controles de aceptación Docker;
+CI pasó en Python 3.12 y 3.13. Se repitieron las acciones Jira y el pipeline Bitbucket reales desde
+la API autenticada, incluyendo filtros negativos, guardas, etiquetas y deduplicación.
+El mismo commit quedó desplegado en el laboratorio: la revisión 2 con referencias por puntos
+pasó el webhook nativo Jira → Bitbucket (pipeline #4 exitoso), filtro negativo y replay duplicado
+sin otra ejecución. La revisión 1 y su checksum permanecieron intactos; claves literales e índices
+se verificaron además mediante evaluate positivo/negativo sin efectos, no como campos nativos Jira.
+Esta evidencia de laboratorio no certifica producción ni sustituye las pruebas de cada operador.
 Subtareas y asignación todavía tienen pruebas simuladas, no aceptación contra Jira real.
 El inventario de capacidades y brechas está en use-cases.json.
 Admite hasta diez acciones secuenciales por regla. No hay branching de acciones ni compensaciones aún.
