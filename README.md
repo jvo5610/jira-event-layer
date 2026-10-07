@@ -121,7 +121,11 @@ No cambiar a público un repositorio privado anterior sin revisar también todo 
 Dependencias fijadas en uv.lock. Sin Redis, SQS, editor visual ni código arbitrario dentro del YAML.
 No se promete paridad completa con Jira Automation. Bitbucket y las siete acciones Jira están
 verificadas contra proveedores reales desde la API autenticada. El flujo nativo Jira hacia Bitbucket
-se verificó en el laboratorio anterior; falta repetir el webhook nativo con esta revisión desplegada.
+se volvió a verificar el 2026-10-07 desde una instalación vacía basada en el commit dfdebe2:
+transición real → webhook firmado → persistencia → regla YAML → pipeline NO-OP exitoso.
+También pasaron el filtro negativo, la entrega duplicada y evaluate/compare sin efectos externos.
+La instalación limpia completó 147 tests y 8 controles de aceptación Docker. Esta evidencia de
+laboratorio no certifica producción ni sustituye las pruebas de la instalación de cada operador.
 Subtareas y asignación todavía tienen pruebas simuladas, no aceptación contra Jira real.
 El inventario de capacidades y brechas está en use-cases.json.
 Admite hasta diez acciones secuenciales por regla. No hay branching de acciones ni compensaciones aún.
