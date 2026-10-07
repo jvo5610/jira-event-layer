@@ -8,5 +8,5 @@ with os.fdopen(fd, "w") as output:
     output.write("DATABASE_URL=postgresql://automation:local-test-only@127.0.0.1:55439/automation\n")
     output.write("ADMIN_TOKEN=" + secrets.token_urlsafe(48) + "\n")
     output.write("JIRA_WEBHOOK_SECRET=" + secrets.token_urlsafe(48) + "\n")
-    output.write("BITBUCKET_EMAIL=\nBITBUCKET_TOKEN=\n")
+    output.write("BITBUCKET_ACCOUNT_EMAIL=\nBITBUCKET_API_TOKEN=\n")
 print("Generated .env (owner-only); existing files are never overwritten.")

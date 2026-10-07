@@ -1,7 +1,7 @@
 {
   "as_of": "2026-10-07",
   "production_ready": false,
-  "runtime_release": "0.2.0 candidate; lab acceptance does not certify production",
+  "runtime_release": "1.0.0 candidate; lab acceptance does not certify production",
   "implemented_hardening": [
     "Portable image and hardened Compose with optional mounted secrets; no cloud dependency in runtime",
     "Deny-by-default connector allowlists; explicit immutable installation tenant",

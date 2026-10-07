@@ -56,7 +56,8 @@ def retry_delay(response):
 
 
 def bind(binding, payload):
-    value = binding.value if binding.path is None else lookup(payload, binding.path)
+    from app.dsl import resolve_binding
+    value = resolve_binding(binding, payload)
     if value is MISSING:
         value = getattr(binding, "default", None)
         if value is None:

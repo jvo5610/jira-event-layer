@@ -1,7 +1,7 @@
 # Portable installation; PostgreSQL is supplied by the operator.
 # Use compose.dev.yaml explicitly for the disposable development database.
 x-runtime: &runtime
-  image: ${AUTOMATION_IMAGE:-automation-api:0.2.0}
+  image: ${AUTOMATION_IMAGE:-automation-api:1.0.0}
   build: .
   user: "10001:10001"
   read_only: true
@@ -24,10 +24,10 @@ x-environment: &environment
   ALLOWED_JIRA_PROJECTS: ${ALLOWED_JIRA_PROJECTS:-}
   JIRA_REQUIRED_LABEL: ${JIRA_REQUIRED_LABEL:-automation-managed}
   JIRA_IGNORED_ACTOR_IDS: ${JIRA_IGNORED_ACTOR_IDS:-}
-  BITBUCKET_EMAIL: ${BITBUCKET_EMAIL:-}
-  BITBUCKET_TOKEN_FILE: /run/secrets/bitbucket_token
-  JIRA_EMAIL: ${JIRA_EMAIL:-}
-  JIRA_TOKEN_FILE: /run/secrets/jira_token
+  BITBUCKET_ACCOUNT_EMAIL: ${BITBUCKET_ACCOUNT_EMAIL:-}
+  BITBUCKET_API_TOKEN_FILE: /run/secrets/bitbucket_api_token
+  JIRA_ACCOUNT_EMAIL: ${JIRA_ACCOUNT_EMAIL:-}
+  JIRA_API_TOKEN_FILE: /run/secrets/jira_api_token
   JIRA_CLOUD_ID: ${JIRA_CLOUD_ID:-}
   JIRA_MAX_DAILY_WRITES: ${JIRA_MAX_DAILY_WRITES:-100}
   BITBUCKET_MAX_DAILY_WRITES: ${BITBUCKET_MAX_DAILY_WRITES:-100}
@@ -51,7 +51,7 @@ services:
       READER_TOKEN_FILE: /run/secrets/reader_token
       WRITER_TOKEN_FILE: /run/secrets/writer_token
       OPERATOR_TOKEN_FILE: /run/secrets/operator_token
-    secrets: [database_url, admin_token, reader_token, writer_token, operator_token, bitbucket_token, jira_token]
+    secrets: [database_url, admin_token, reader_token, writer_token, operator_token, bitbucket_api_token, jira_api_token]
     ports: ["127.0.0.1:${ADMIN_PORT:-8088}:8080"]
     depends_on:
       migrate: {condition: service_completed_successfully}
@@ -81,7 +81,7 @@ services:
     <<: *runtime
     command: [python, -m, app.worker]
     environment: *environment
-    secrets: [database_url, bitbucket_token, jira_token]
+    secrets: [database_url, bitbucket_api_token, jira_api_token]
     depends_on:
       migrate: {condition: service_completed_successfully}
     healthcheck:
@@ -106,7 +106,7 @@ secrets:
     file: ${AUTOMATION_SECRETS_DIR:-./secrets}/operator_token
   jira_webhook_secret:
     file: ${AUTOMATION_SECRETS_DIR:-./secrets}/jira_webhook_secret
-  bitbucket_token:
-    file: ${AUTOMATION_SECRETS_DIR:-./secrets}/bitbucket_token
-  jira_token:
-    file: ${AUTOMATION_SECRETS_DIR:-./secrets}/jira_token
+  bitbucket_api_token:
+    file: ${AUTOMATION_SECRETS_DIR:-./secrets}/bitbucket_api_token
+  jira_api_token:
+    file: ${AUTOMATION_SECRETS_DIR:-./secrets}/jira_api_token

@@ -47,7 +47,7 @@ def eventually(check, seconds=35):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image", default="automation-api:0.2.0")
+    parser.add_argument("--image", default="automation-api:1.0.0")
     args = parser.parse_args()
     name = "automation-smoke-" + uuid.uuid4().hex[:12]
     containers = []

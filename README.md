@@ -6,7 +6,7 @@ An open-source, API-first event layer for Jira Cloud. Receive native webhooks, p
 PostgreSQL, evaluate versioned YAML rules, and execute deterministic Jira or Bitbucket actions.
 The frontend is optional. No LLM, Redis, SQS or specific cloud is required.
 
-**Experimental (0.2.0 candidate), not production-certified.** This is not a complete replacement for
+**Version 1.0.0 candidate; not production-certified.** This is not a complete replacement for
 Jira Automation. Jira create/clone/edit/transition/comment/link/get and Bitbucket pipeline actions are
 implemented. Scheduling, action branching, broad JQL fanout, JSM features and other providers are not.
 See [capabilities and production gates](use-cases.json). Not affiliated with Atlassian.
@@ -54,7 +54,7 @@ Backend independiente del front para **guardar jobs/reglas YAML, comparar filtro
 Motor single-tenant portable. Cada instalación tiene su propia base, identidad y credenciales.
 No necesita un LLM para ejecutar. Las instalaciones de laboratorio no son dependencias del producto.
 
-Versión 0.2.0 en preparación: mejoras de operación y seguridad implementadas y verificadas localmente.
+Versión 1.0.0 en preparación: primera versión del contrato público, con cambios rompientes intencionales.
 No está certificada para producción ni publicada como release. Ver los gates pendientes al final.
 
 ## Probar desde un clon limpio
@@ -82,16 +82,27 @@ Son opt-in y separadas de la suite reproducible. Crear un proyecto/repositorio d
 credencial con permisos mínimos; nunca usar recursos productivos. El pipeline elegido debe ser NO-OP.
 
 ```sh
-export E2E_ALLOW_WRITES=yes
-uv run python tools/e2e_live.py --provider bitbucket --output work/e2e-bitbucket
-uv run python tools/e2e_live.py --provider jira --output work/e2e-jira
+uv run python tools/e2e_live.py --provider bitbucket --output work/e2e-bitbucket \
+  --bitbucket-repository example-workspace/automation-lab-provisioning \
+  --bitbucket-branch main --bitbucket-pipeline setup-new-repository \
+  --allow-remote-writes
+
+# IDs de ejemplo: reemplazarlos por los del proyecto desechable.
+uv run python tools/e2e_live.py --provider jira --output work/e2e-jira \
+  --jira-project DEMO --jira-issue-type-id 10001 \
+  --jira-target-status-id 10003 --jira-link-type-id 10000 \
+  --allow-remote-writes
 ```
 
-Bitbucket requiere BITBUCKET_EMAIL, BITBUCKET_TOKEN, E2E_BITBUCKET_REPOSITORY (workspace/repo),
-E2E_BITBUCKET_BRANCH y E2E_BITBUCKET_PIPELINE. Jira requiere JIRA_EMAIL, JIRA_TOKEN, JIRA_CLOUD_ID,
-E2E_JIRA_PROJECT, E2E_JIRA_ISSUE_TYPE_ID, E2E_JIRA_TO_STATUS_ID y E2E_JIRA_LINK_TYPE_ID.
+Las únicas variables de entorno del proveedor son las conexiones normales:
+BITBUCKET_ACCOUNT_EMAIL/BITBUCKET_API_TOKEN y
+JIRA_ACCOUNT_EMAIL/JIRA_API_TOKEN/JIRA_CLOUD_ID.
+La versión 1 no acepta los nombres anteriores; los tokens también admiten
+BITBUCKET_API_TOKEN_FILE y JIRA_API_TOKEN_FILE.
+Los destinos se pasan explícitamente como argumentos; no se leen variables E2E_* ni TEST_*.
+La autorización para escribir también es un argumento obligatorio para ejecutar, no una variable persistente.
 No pegar tokens en comandos ni en YAML: cargarlos mediante el gestor de secretos del operador.
-Primero construir la imagen automation-api:0.2.0; --image permite probar otra imagen explícita.
+Primero construir la imagen automation-api:1.0.0; --image permite probar otra imagen explícita.
 
 La prueba usa la API HTTP, Postgres y worker reales en contenedores, valida el resultado con lecturas
 independientes al proveedor y comprueba deduplicación/filtro negativo. Jira crea tarjetas etiquetadas;
@@ -186,7 +197,19 @@ Trigger source+event y when con all/any/not/some. Predicados: eq/ne/in/contains/
 Paths son referencias relativas al objeto leído, sin prefijo `$`: `issue.key`, `changelog.items`.
 `some` evalúa `where` sobre cada elemento de la lista, no sobre el evento completo.
 Igualdad tipada: true no equivale a 1. Un campo ausente no satisface ne; usar exists explícitamente.
-Las variables de acciones son literales {value: "..."} o referencias {path: issue.key, default: "..."}.
+Las entradas de acciones aceptan literales normales y referencias `"${issue.key}"`.
+Una referencia completa conserva el tipo JSON original; `"Ticket ${issue.key}"` produce texto.
+`'$${issue.key}'` produce el texto literal `${issue.key}`. Claves literales e índices funcionan
+dentro de referencias: `'${issue.fields["some.value"][0].name}'`.
+Un campo inexistente falla; no se ejecutan expresiones ni se reinterpreta el contenido obtenido.
+La interpolación dentro de texto solo admite escalares no nulos, con booleanos `true`/`false`;
+objetos y listas deben usarse como referencia completa en campos Jira, no en variables Bitbucket.
+Máximo 4096 caracteres por plantilla y 50 referencias; las acciones mantienen sus límites de salida.
+La forma explícita sigue disponible: `{value: "${texto-literal}"}` no interpola y
+`{path: issue.key, default: "..."}` permite un default. Objetos literales usan `{value: {...}}`.
+Las referencias funcionan en campos/variables y argumentos de acciones que aceptan bindings;
+no en nombres de repositorios, ramas, IDs de configuración o predicados `when`.
+Reglas anteriores conservan su representación normalizada y checksum; no se migran automáticamente.
 No hay eval, shell, Jinja, Python en YAML, URLs arbitrarias ni resolución de secretos desde reglas.
 64 KiB por YAML, sin aliases ni claves duplicadas, filtros con profundidad y presupuesto acotados.
 
@@ -265,7 +288,7 @@ El contexto lo construye el worker
 desde Postgres; un evento entrante no puede sobrescribirlo. Las cadenas se reanudan desde el paso pendiente.
 Ejemplo: examples/jira-create-from-source.yaml (borrador, nunca activado automáticamente).
 
-El conector queda deshabilitado por defecto. Requiere JIRA_EMAIL, JIRA_TOKEN, JIRA_CLOUD_ID y
+El conector queda deshabilitado por defecto. Requiere JIRA_ACCOUNT_EMAIL, JIRA_API_TOKEN, JIRA_CLOUD_ID y
 ALLOWED_JIRA_PROJECTS. Usa exclusivamente https://api.atlassian.com/ex/jira/{cloudId}/rest/api/3.
 JIRA_REQUIRED_LABEL (default automation-managed) es obligatoria en todas las tarjetas leídas/modificadas;
 las tarjetas creadas reciben esa etiqueta. El proyecto real de cada tarjeta se verifica antes de actuar.
@@ -349,7 +372,7 @@ Para Compose con PostgreSQL administrado por el operador:
    Se niega a sobrescribir un directorio existente. Los tokens de conectores/roles opcionales empiezan vacíos.
 4. Configurar allowlists, email/cloud ID e identidad de servicio. Cargar credenciales de conectores en los
    archivos privados, nunca en YAML de reglas. El runtime soporta NAME o NAME_FILE, no ambos.
-5. Construir `docker build -t automation-api:0.2.0 .` o usar una imagen de un registro privado validado.
+5. Construir `docker build -t automation-api:1.0.0 .` o usar una imagen de un registro privado validado.
 6. Ejecutar primero `docker compose --env-file install.env run --rm migrate` con el archivo elegido.
 7. Aplicar deploy/runtime-grants.sql como propietario, pasando runtime_role al cliente psql.
    Otorga DML en datos y lectura de metadatos de instalación/migración; no otorga CREATE ni propiedad.
@@ -408,7 +431,7 @@ no hay downgrade destructivo automático. Recuperación: restaurar backup en una
 correspondiente, conservando tenant y claves. Antes de reanudar escrituras reconciliar efectos posteriores
 al backup: restaurar estado local NO revierte acciones que ya ocurrieron en Jira/Bitbucket.
 
-Prueba reproducible sin proveedores: `uv run python tools/smoke_container.py --image automation-api:0.2.0`.
+Prueba reproducible sin proveedores: `uv run python tools/smoke_container.py --image automation-api:1.0.0`.
 Crea infraestructura Docker efímera propia, prueba migración/upgrade/roles/reinicio/backup y la elimina al terminar.
 No usa .env, credenciales personales ni bases existentes. Los tests de conectores no equivalen a certificación cloud.
 También levanta el Compose distribuido con secretos montados y verifica la separación de rutas.

@@ -5,7 +5,7 @@ import re
 from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 from app.paths import MAX_PATH, PATH_DESCRIPTION, PATH_EXAMPLES, PATH_SYNTAX, PathError, check_path as validate_path, resolve
 
 MAX_YAML = 65536
@@ -63,13 +63,74 @@ class Binding(Strict):
         return self
 
 
+def template_parts(text):
+    """Compile bounded references; braces inside quoted JSON keys are literal."""
+    if len(text) > 4096:
+        raise RuleError("Template exceeds 4096 characters")
+    parts, literal, position = [], "", 0
+    while position < len(text):
+        if text.startswith("$${", position):
+            literal += "${"
+            position += 3
+        elif text.startswith("${", position):
+            if literal:
+                parts.append(("text", literal))
+                literal = ""
+            start = position + 2
+            position = start
+            quoted = escaped = False
+            while position < len(text):
+                char = text[position]
+                if escaped:
+                    escaped = False
+                elif quoted and char == "\\":
+                    escaped = True
+                elif char == '"':
+                    quoted = not quoted
+                elif char == "}" and not quoted:
+                    break
+                position += 1
+            if position == len(text) or position == start:
+                raise RuleError("Unclosed or empty ${field} reference")
+            path = text[start:position]
+            check_path(path)
+            parts.append(("path", path))
+            if sum(kind == "path" for kind, _ in parts) > 50:
+                raise RuleError("Template exceeds 50 references")
+            position += 1
+        else:
+            literal += text[position]
+            position += 1
+    if literal or not parts:
+        parts.append(("text", literal))
+    return parts
+
+
+class TemplateBinding(Strict):
+    template: str = Field(max_length=4096, description="${path} preserves the referenced JSON type; embedded references produce text. $${ escapes a literal ${. Missing fields fail. No expressions or recursive interpolation.", examples=['${issue.key}', 'Ticket ${issue.key}', '${issue.fields["some.value"]}'])
+
+    @model_validator(mode="after")
+    def valid(self):
+        template_parts(self.template)
+        return self
+
+
+def short_binding(raw):
+    if isinstance(raw, str):
+        return {"template": raw} if "${" in raw else {"value": raw}
+    return raw
+
+
+TextBinding = Annotated[Binding | TemplateBinding, BeforeValidator(short_binding, json_schema_input_type=str | Binding | TemplateBinding)]
+
+
 class Action(Strict):
     type: Literal["bitbucket.pipeline"]
     workspace: str
     repository: str
     branch: str = "master"
     pipeline: str
-    variables: dict[str, Binding] = Field(default_factory=dict, max_length=50)
+    variables: dict[str, TextBinding] = Field(default_factory=dict, max_length=50)
 
     @model_validator(mode="after")
     def valid(self):
@@ -109,8 +170,19 @@ class ValueBinding(Strict):
         return self
 
 
+def short_value(raw):
+    if isinstance(raw, str):
+        return short_binding(raw)
+    if raw is None or isinstance(raw, (int, float, bool, list)):
+        return {"value": raw}
+    return raw
+
+
+FieldBinding = Annotated[ValueBinding | TemplateBinding, BeforeValidator(short_value, json_schema_input_type=str | int | float | bool | list[Any] | None | ValueBinding | TemplateBinding)]
+
+
 class JiraFields(Strict):
-    fields: dict[str, ValueBinding] = Field(default_factory=dict, max_length=30)
+    fields: dict[str, FieldBinding] = Field(default_factory=dict, max_length=30)
 
     @model_validator(mode="after")
     def valid_fields(self):
@@ -124,12 +196,12 @@ class JiraCreate(JiraFields):
     type: Literal["jira.issue.create"]
     project: str = Field(pattern=r"^[A-Z][A-Z0-9_]{1,30}$")
     issue_type_id: str = Field(pattern=r"^[0-9]+$")
-    parent: Binding | None = None
+    parent: TextBinding | None = None
 
 
 class JiraClone(JiraCreate):
     type: Literal["jira.issue.clone"]
-    source: Binding
+    source: TextBinding
     copy_fields: list[str] = Field(default_factory=lambda: ["summary", "description"], min_length=1, max_length=30)
 
     @model_validator(mode="after")
@@ -140,7 +212,7 @@ class JiraClone(JiraCreate):
 
 class JiraEdit(JiraFields):
     type: Literal["jira.issue.edit"]
-    issue: Binding
+    issue: TextBinding
 
     @model_validator(mode="after")
     def not_empty(self):
@@ -151,27 +223,27 @@ class JiraEdit(JiraFields):
 
 class JiraTransition(JiraFields):
     type: Literal["jira.issue.transition"]
-    issue: Binding
+    issue: TextBinding
     to_status_id: str = Field(pattern=r"^[0-9]+$")
     from_status_id: str | None = Field(default=None, pattern=r"^[0-9]+$")
 
 
 class JiraComment(Strict):
     type: Literal["jira.comment.add"]
-    issue: Binding
-    text: Binding
+    issue: TextBinding
+    text: TextBinding
 
 
 class JiraLink(Strict):
     type: Literal["jira.issue.link"]
-    inward: Binding
-    outward: Binding
+    inward: TextBinding
+    outward: TextBinding
     link_type_id: str = Field(pattern=r"^[0-9]+$")
 
 
 class JiraGet(Strict):
     type: Literal["jira.issue.get"]
-    issue: Binding
+    issue: TextBinding
     # Guard evaluated against the current issue, not the webhook snapshot.
     require: dict | None = Field(default=None, description="Filter over the fetched current Jira issue, not the event. " + PATH_DESCRIPTION,
                                 examples=[{"path": "fields.status.id", "op": "eq", "value": "10003"}],
@@ -329,12 +401,34 @@ def match(rule, source, event_type, payload):
     return evaluate(rule.when, payload)
 
 
+def resolve_binding(binding, payload):
+    if not isinstance(binding, TemplateBinding):
+        return binding.value if binding.path is None else lookup(payload, binding.path)
+    parts = template_parts(binding.template)
+    if len(parts) == 1 and parts[0][0] == "path":
+        value = lookup(payload, parts[0][1])
+        if value is MISSING:
+            raise RuleError("Template field missing")
+        return value
+    output = []
+    for kind, content in parts:
+        value = content if kind == "text" else lookup(payload, content)
+        if value is MISSING:
+            raise RuleError("Template field missing")
+        if kind == "path" and type(value) not in {str, int, float, bool}:
+            raise RuleError("Embedded template references must be non-null scalars")
+        output.append(value if isinstance(value, str) else json.dumps(value, allow_nan=False))
+        if sum(len(part) for part in output) > 4096:
+            raise RuleError("Rendered template exceeds 4096 characters")
+    return "".join(output)
+
+
 def render_action(action, payload):
     variables = []
     for key, binding in action.variables.items():
-        value = binding.value if binding.path is None else lookup(payload, binding.path)
+        value = resolve_binding(binding, payload)
         if value is MISSING or value is None:
-            value = binding.default
+            value = getattr(binding, "default", None)
         if value is None or type(value) not in {str, int, float, bool}:
             raise RuleError(f"Variable {key} missing or not scalar")
         value = str(value)

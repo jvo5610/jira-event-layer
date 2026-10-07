@@ -1,6 +1,6 @@
 [project]
 name = "jira-event-layer"
-version = "0.2.0"
+version = "1.0.0"
 description = "Portable, deterministic Jira event processing with YAML rules and durable PostgreSQL execution"
 readme = "README.md"
 license = "MIT"

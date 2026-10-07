@@ -1,6 +1,6 @@
 """Opt-in API -> PostgreSQL -> worker -> real provider acceptance tests.
 
-Requires E2E_ALLOW_WRITES=yes and explicit provider credentials/targets. Creates
+Requires --allow-remote-writes and explicit provider credentials/targets. Creates
 labelled test issues and/or runs a configured NO-OP pipeline. Never edits existing
 issues or deletes remote evidence. No native webhook registration is changed.
 """
@@ -79,27 +79,27 @@ def execute_case(client, actions, label, marker, timeout=240):
 
 
 def run(args):
-    if os.getenv("E2E_ALLOW_WRITES") != "yes":
-        raise RuntimeError("Live E2E creates remote test resources. Set E2E_ALLOW_WRITES=yes explicitly")
+    if not args.allow_remote_writes:
+        raise RuntimeError("Live acceptance creates remote resources. Pass --allow-remote-writes explicitly")
     stamp = uuid.uuid4().hex[:12]
     name = "automation-live-" + stamp
     config = {"TENANT_ID": name, "ADMIN_TOKEN": secrets.token_urlsafe(48), "API_SURFACE": "management"}
     if args.provider in {"bitbucket", "all"}:
-        for key in ("BITBUCKET_EMAIL", "BITBUCKET_TOKEN"):
+        for key in ("BITBUCKET_ACCOUNT_EMAIL", "BITBUCKET_API_TOKEN"):
             config[key] = required(key)
-        repo = required("E2E_BITBUCKET_REPOSITORY")
+        repo = args.bitbucket_repository
         if repo.count("/") != 1:
-            raise RuntimeError("E2E_BITBUCKET_REPOSITORY must be workspace/repository")
+            raise RuntimeError("--bitbucket-repository must be workspace/repository")
         config["ALLOWED_REPOSITORIES"] = repo
-        pipeline = required("E2E_BITBUCKET_PIPELINE")
-        branch = required("E2E_BITBUCKET_BRANCH")
+        pipeline = args.bitbucket_pipeline
+        branch = args.bitbucket_branch
     if args.provider in {"jira", "all"}:
-        for key in ("JIRA_EMAIL", "JIRA_TOKEN", "JIRA_CLOUD_ID"):
+        for key in ("JIRA_ACCOUNT_EMAIL", "JIRA_API_TOKEN", "JIRA_CLOUD_ID"):
             config[key] = required(key)
-        project = required("E2E_JIRA_PROJECT")
-        issue_type = required("E2E_JIRA_ISSUE_TYPE_ID")
-        status = required("E2E_JIRA_TO_STATUS_ID")
-        link_type = required("E2E_JIRA_LINK_TYPE_ID")
+        project = args.jira_project
+        issue_type = args.jira_issue_type_id
+        status = args.jira_target_status_id
+        link_type = args.jira_link_type_id
         config.update(ALLOWED_JIRA_PROJECTS=project, JIRA_REQUIRED_LABEL="automation-managed", JIRA_MAX_DAILY_WRITES="20")
     report = {"test_id": name, "candidate_image": args.image, "ingress": "authenticated API event, not a native Jira webhook",
               "provider_calls": "real", "cases": [], "remote_resources_deleted": False}
@@ -144,7 +144,7 @@ def run(args):
                                   "PROJECT_KEY": "E2E", "REPOSITORY_NAME": name, "DESCRIPTION": "Portable live E2E NO-OP",
                                   "LANGUAGE": "python", "DEFAULT_REVIEWERS": "", "AWS_ACCOUNT_ID": "", "JIRA_ISSUE_KEY": "E2E-1"}.items()}}
                     run = execute_case(client, [action], "live-bitbucket", stamp + "-bb")
-                    with httpx.Client(timeout=20, auth=(config["BITBUCKET_EMAIL"], config["BITBUCKET_TOKEN"])) as provider:
+                    with httpx.Client(timeout=20, auth=(config["BITBUCKET_ACCOUNT_EMAIL"], config["BITBUCKET_API_TOKEN"])) as provider:
                         observed = provider.get(f"https://api.bitbucket.org/2.0/repositories/{repo}/pipelines/{run['external_uuid']}")
                         observed.raise_for_status()
                         data = observed.json()
@@ -180,7 +180,7 @@ def run(args):
                                if row["detail"].get("result") is not None}
                     created, cloned = results["0"]["key"], results["4"]["key"]
                     with httpx.Client(base_url=f"https://api.atlassian.com/ex/jira/{config['JIRA_CLOUD_ID']}/rest/api/3/",
-                                      auth=(config["JIRA_EMAIL"], config["JIRA_TOKEN"]), timeout=20) as provider:
+                                      auth=(config["JIRA_ACCOUNT_EMAIL"], config["JIRA_API_TOKEN"]), timeout=20) as provider:
                         original = provider.get("issue/" + created, params={"fields": "summary,status,labels,issuelinks", "properties": "automation.operation"})
                         original.raise_for_status()
                         current = original.json()["fields"]
@@ -209,7 +209,7 @@ def run(args):
                     stopped_results = [row["detail"]["result"] for row in stopped["log"] if row["detail"].get("result")]
                     assert len(stopped_results) == 1 and stopped_results[0]["stop"]
                     with httpx.Client(base_url=f"https://api.atlassian.com/ex/jira/{config['JIRA_CLOUD_ID']}/rest/api/3/",
-                                      auth=(config["JIRA_EMAIL"], config["JIRA_TOKEN"]), timeout=20) as provider:
+                                      auth=(config["JIRA_ACCOUNT_EMAIL"], config["JIRA_API_TOKEN"]), timeout=20) as provider:
                         after = provider.get("issue/" + created + "/comment")
                         after.raise_for_status()
                     assert after.json()["total"] == comments.json()["total"]
@@ -242,9 +242,33 @@ def run(args):
         command("docker", "network", "rm", name, check=False)
 
 
-if __name__ == "__main__":
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--provider", choices=["bitbucket", "jira", "all"], required=True)
-    parser.add_argument("--image", default="automation-api:0.2.0")
+    parser.add_argument("--image", default="automation-api:1.0.0")
     parser.add_argument("--output", required=True, help="New private evidence directory, never an existing directory")
-    run(parser.parse_args())
+    parser.add_argument("--allow-remote-writes", action="store_true", help="Explicitly permit creating remote issues and running pipelines")
+    parser.add_argument("--bitbucket-repository", help="Exact workspace/repository")
+    parser.add_argument("--bitbucket-branch")
+    parser.add_argument("--bitbucket-pipeline")
+    parser.add_argument("--jira-project", help="Project key")
+    parser.add_argument("--jira-issue-type-id")
+    parser.add_argument("--jira-target-status-id")
+    parser.add_argument("--jira-link-type-id")
+    args = parser.parse_args(argv)
+    selected = []
+    if args.provider in {"bitbucket", "all"}:
+        selected += ["bitbucket_repository", "bitbucket_branch", "bitbucket_pipeline"]
+    if args.provider in {"jira", "all"}:
+        selected += ["jira_project", "jira_issue_type_id", "jira_target_status_id", "jira_link_type_id"]
+    for field in selected:
+        value = getattr(args, field)
+        if not value or not value.strip():
+            parser.error("required argument: --" + field.replace("_", "-"))
+    if args.provider in {"bitbucket", "all"} and (args.bitbucket_repository.count("/") != 1 or not all(args.bitbucket_repository.split("/"))):
+        parser.error("--bitbucket-repository must be workspace/repository")
+    return args
+
+
+if __name__ == "__main__":
+    run(parse_args())

@@ -8,6 +8,66 @@ from app.dsl import RuleError, evaluate, lookup, match, parse_rule, render_actio
 EXAMPLE = Path("examples/repository-request.yaml").read_text()
 
 
+def template_rule(value):
+    raw = yaml.safe_load(EXAMPLE)
+    raw["actions"][0]["variables"] = {"INPUT": value}
+    return parse_rule(yaml.safe_dump(raw))[0]
+
+
+@pytest.mark.parametrize("text,payload,expected", [
+    ("${issue.key}", {"issue": {"key": "KAN-1"}}, "KAN-1"),
+    ('${issue.fields["some.value"][0].name}', {"issue": {"fields": {"some.value": [{"name": "repo"}]}}}, "repo"),
+    ('${issue.fields["a}b"]}', {"issue": {"fields": {"a}b": "literal"}}}, "literal"),
+    ("Ticket ${issue.key}: ${ok}", {"issue": {"key": "KAN-1"}, "ok": True}, "Ticket KAN-1: true"),
+    ("$${issue.key}", {}, "${issue.key}"),
+    ("${value}", {"value": "${missing}"}, "${missing}"),
+    ({"value": "${missing}"}, {}, "${missing}"),
+    ("python", {}, "python"),
+])
+def test_short_bindings(text, payload, expected):
+    rule = template_rule(text)
+    assert render_action(rule.actions[0], payload)["variables"][0]["value"] == expected
+    from app.dsl import Rule
+    restored = Rule.model_validate(rule.model_dump())
+    assert render_action(restored.actions[0], payload) == render_action(rule.actions[0], payload)
+
+
+@pytest.mark.parametrize("value", [123, True, ["one"], {"key": 1}, None])
+def test_complete_reference_preserves_json_type(value):
+    from app.dsl import Rule
+    from app.jira import bind
+    raw = yaml.safe_load(EXAMPLE)
+    raw["actions"] = [{"type": "jira.issue.edit", "issue": "${issue.key}",
+                       "fields": {"description": "${input}"}}]
+    rule = Rule.model_validate(raw)
+    assert bind(rule.actions[0].fields["description"], {"input": value}) == value
+    assert type(bind(rule.actions[0].fields["description"], {"input": value})) is type(value)
+
+
+@pytest.mark.parametrize("text", ["${}", "${issue.key", "${issue.key.upper()}", "${issue[*]}",
+                                  "${${issue.key}}", "${issue.key}" * 51, "a" * 4097])
+def test_invalid_templates_rejected_before_execution(text):
+    with pytest.raises(RuleError):
+        template_rule(text)
+
+
+@pytest.mark.parametrize("text,payload", [("${missing}", {}), ("prefix ${missing}", {}),
+                                        ("prefix ${value}", {"value": []}),
+                                        ("prefix ${value}", {"value": None}),
+                                        ("prefix ${value}", {"value": "x" * 4096})])
+def test_template_runtime_errors(text, payload):
+    with pytest.raises(RuleError):
+        render_action(template_rule(text).actions[0], payload)
+
+
+def test_schema_advertises_short_bindings():
+    from app.dsl import Rule
+    schema = Rule.model_json_schema()
+    options = schema["$defs"]["Action"]["properties"]["variables"]["additionalProperties"]["anyOf"]
+    assert {"type": "string"} in options
+    assert "${path}" in schema["$defs"]["TemplateBinding"]["properties"]["template"]["description"]
+
+
 @pytest.mark.parametrize("example", sorted(Path("examples").glob("*.yaml")))
 def test_all_published_yaml_examples_validate(example):
     parse_rule(example.read_text())

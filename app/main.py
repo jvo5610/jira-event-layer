@@ -65,7 +65,7 @@ def create_app(settings=None, store=None):
         finally:
             await run_in_threadpool(app.state.store.close)
 
-    app = FastAPI(title="Automation API", version="0.2.0", lifespan=lifespan,
+    app = FastAPI(title="Automation API", version="1.0.0", lifespan=lifespan,
                   openapi_url=None, docs_url=None, redoc_url=None,
                   description="Single-tenant deterministic automation engine. Separate API, workers and PostgreSQL; no cloud dependency.")
     bearer = HTTPBearer(auto_error=False)

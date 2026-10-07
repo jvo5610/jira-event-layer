@@ -25,10 +25,10 @@ actions:
     branch: master
     pipeline: setup-new-repository
     variables:
-      PROJECT_KEY: {value: WIL}
-      REPOSITORY_NAME: {value: lab-example}
-      DESCRIPTION: {path: issue.fields.summary}
-      LANGUAGE: {value: python}
-      DEFAULT_REVIEWERS: {value: ""}
-      AWS_ACCOUNT_ID: {value: ""}
-      JIRA_ISSUE_KEY: {path: issue.key}
+      PROJECT_KEY: WIL
+      REPOSITORY_NAME: lab-example
+      DESCRIPTION: "${issue.fields.summary}"
+      LANGUAGE: python
+      DEFAULT_REVIEWERS: ""
+      AWS_ACCOUNT_ID: ""
+      JIRA_ISSUE_KEY: "${issue.key}"

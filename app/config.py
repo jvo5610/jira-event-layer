@@ -4,6 +4,25 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+LEGACY_CONNECTOR_ENV = (
+    "JIRA_EMAIL",
+    "JIRA_TOKEN",
+    "JIRA_TOKEN_FILE",
+    "BITBUCKET_EMAIL",
+    "BITBUCKET_TOKEN",
+    "BITBUCKET_TOKEN_FILE",
+)
+
+
+def reject_legacy_connector_env():
+    configured = [name for name in LEGACY_CONNECTOR_ENV if name in os.environ]
+    if configured:
+        raise RuntimeError(
+            "Legacy connector environment variables are not supported in v1: "
+            + ", ".join(configured)
+        )
+
+
 def secret(name, *, required=False):
     """Environment or mounted file, never both. Errors never include secret values."""
     value, filename = os.getenv(name), os.getenv(name + "_FILE")
@@ -70,13 +89,14 @@ class Settings:
 
     @classmethod
     def from_env(cls, mode="api"):
+        reject_legacy_connector_env()
         surface = os.getenv("API_SURFACE", "all")
         if surface not in {"all", "management", "webhooks"}:
             raise RuntimeError("API_SURFACE must be all, management or webhooks")
         settings = cls(secret("DATABASE_URL", required=True),
                        secret("ADMIN_TOKEN", required=mode == "api" and surface != "webhooks"),
                        secret("JIRA_WEBHOOK_SECRET", required=mode == "api" and surface != "management"),
-                       os.getenv("BITBUCKET_EMAIL", ""), secret("BITBUCKET_TOKEN"), csv("ALLOWED_REPOSITORIES"),
+                       os.getenv("BITBUCKET_ACCOUNT_EMAIL", ""), secret("BITBUCKET_API_TOKEN"), csv("ALLOWED_REPOSITORIES"),
                        tenant=tenant_id(), api_surface=surface)
         for name in ("reader_token", "writer_token", "operator_token"):
             setattr(settings, name, secret(name.upper()))
@@ -87,8 +107,8 @@ class Settings:
         if len(set(present)) != len(present) or (settings.webhook_secret and settings.webhook_secret in present):
             raise RuntimeError("API roles and webhook must use distinct secrets")
         settings.max_body = integer("MAX_BODY_BYTES", 1048576, 1024, 10485760)
-        settings.jira_email = os.getenv("JIRA_EMAIL", "")
-        settings.jira_token = secret("JIRA_TOKEN")
+        settings.jira_email = os.getenv("JIRA_ACCOUNT_EMAIL", "")
+        settings.jira_token = secret("JIRA_API_TOKEN")
         settings.jira_cloud_id = os.getenv("JIRA_CLOUD_ID", "")
         settings.allowed_jira_projects = csv("ALLOWED_JIRA_PROJECTS")
         settings.allowed_jira_fields = tuple(filter(None, os.getenv("ALLOWED_JIRA_FIELDS", ",".join(settings.allowed_jira_fields)).split(",")))

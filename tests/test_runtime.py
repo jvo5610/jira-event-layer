@@ -22,7 +22,9 @@ from test_integration import activate, env, ingest, YAML, EVENT
 @pytest.fixture
 def configuration(monkeypatch):
     # Isolate all environment inputs, never consume developer/provider credentials.
-    names = {"DATABASE_URL", "ADMIN_TOKEN", "JIRA_WEBHOOK_SECRET", "BITBUCKET_TOKEN", "JIRA_TOKEN",
+    names = {"DATABASE_URL", "ADMIN_TOKEN", "JIRA_WEBHOOK_SECRET", "BITBUCKET_API_TOKEN", "JIRA_API_TOKEN",
+             "BITBUCKET_ACCOUNT_EMAIL", "JIRA_ACCOUNT_EMAIL", "BITBUCKET_EMAIL", "BITBUCKET_TOKEN",
+             "JIRA_EMAIL", "JIRA_TOKEN",
              "READER_TOKEN", "WRITER_TOKEN", "OPERATOR_TOKEN", "TENANT_ID", "API_SURFACE",
              "ALLOWED_REPOSITORIES", "ALLOWED_JIRA_PROJECTS", "MAX_BODY_BYTES", "JIRA_REQUIRED_LABEL",
              "JIRA_MAX_DAILY_WRITES", "BITBUCKET_MAX_DAILY_WRITES", "JIRA_IGNORED_ACTOR_IDS"}
@@ -43,6 +45,28 @@ def test_portable_default_configuration(configuration):
     assert cfg.jira_required_label == "automation-managed"
     assert "example-workspace" not in repr(cfg)
     assert "a" * 40 not in repr(cfg) and cfg.database_url not in repr(cfg)
+
+
+def test_v1_connector_environment_names(configuration):
+    configuration.setenv("BITBUCKET_ACCOUNT_EMAIL", "bitbucket@example.com")
+    configuration.setenv("BITBUCKET_API_TOKEN", "bitbucket-secret")
+    configuration.setenv("JIRA_ACCOUNT_EMAIL", "jira@example.com")
+    configuration.setenv("JIRA_API_TOKEN", "jira-secret")
+    cfg = Settings.from_env()
+    assert cfg.bitbucket_email == "bitbucket@example.com"
+    assert cfg.bitbucket_token == "bitbucket-secret"
+    assert cfg.jira_email == "jira@example.com"
+    assert cfg.jira_token == "jira-secret"
+
+
+@pytest.mark.parametrize("name", [
+    "BITBUCKET_EMAIL", "BITBUCKET_TOKEN", "BITBUCKET_TOKEN_FILE",
+    "JIRA_EMAIL", "JIRA_TOKEN", "JIRA_TOKEN_FILE",
+])
+def test_legacy_connector_environment_names_are_rejected(configuration, name):
+    configuration.setenv(name, "legacy")
+    with pytest.raises(RuntimeError, match="not supported in v1"):
+        Settings.from_env()
 
 
 def test_safety_label_cannot_impersonate_flow_label(configuration):
@@ -146,9 +170,9 @@ def test_file_secrets_and_conflicts(configuration, tmp_path):
 def test_secret_file_bounds(configuration, tmp_path, value):
     path = tmp_path / "secret"
     path.write_bytes(value)
-    configuration.setenv("JIRA_TOKEN_FILE", str(path))
+    configuration.setenv("JIRA_API_TOKEN_FILE", str(path))
     with pytest.raises(RuntimeError, match="bounded UTF-8"):
-        secret("JIRA_TOKEN")
+        secret("JIRA_API_TOKEN")
 
 
 @pytest.mark.parametrize("name,value", [

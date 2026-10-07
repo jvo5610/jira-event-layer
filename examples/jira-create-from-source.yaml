@@ -20,29 +20,29 @@ when:
             - {path: to, op: eq, value: "10003"}
 actions:
   - type: jira.issue.get
-    issue: {path: issue.key}
+    issue: "${issue.key}"
     require: {path: fields.status.id, op: eq, value: "10003"}
   - type: jira.issue.create
     project: DEMO
     issue_type_id: "10003"
     fields:
-      summary: {value: "[Automation example] Ticket creado por el motor"}
-      description: {path: issue.fields.summary}
+      summary: "[Automation example] Ticket creado por el motor"
+      description: "${issue.fields.summary}"
   - type: jira.comment.add
-    issue: {path: '_steps["1"].key'}
-    text: {value: "Ticket creado a partir del cierre de la solicitud de laboratorio."}
+    issue: '${_steps["1"].key}'
+    text: "Ticket creado a partir del cierre de la solicitud de laboratorio."
   - type: jira.issue.edit
-    issue: {path: '_steps["1"].key'}
+    issue: '${_steps["1"].key}'
     fields:
-      summary: {value: "[Automation example] Ticket actualizado por el motor"}
+      summary: "[Automation example] Ticket actualizado por el motor"
   - type: jira.issue.transition
-    issue: {path: '_steps["1"].key'}
+    issue: '${_steps["1"].key}'
     from_status_id: "10000"
     to_status_id: "10001"
   - type: jira.issue.clone
-    source: {path: '_steps["1"].key'}
+    source: '${_steps["1"].key}'
     project: DEMO
     issue_type_id: "10003"
     copy_fields: [summary, description]
     fields:
-      summary: {value: "[Automation example] Copia controlada del ticket"}
+      summary: "[Automation example] Copia controlada del ticket"

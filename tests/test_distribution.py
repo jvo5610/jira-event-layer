@@ -4,8 +4,37 @@ import pytest
 import yaml
 
 from tools.export_source import export
-from tools.e2e_live import rule_yaml
+from tools.e2e_live import parse_args, rule_yaml, run
 from app.dsl import parse_rule
+
+
+def test_live_runner_destinations_are_arguments_not_environment(monkeypatch):
+    monkeypatch.setenv("E2E_BITBUCKET_REPOSITORY", "unexpected/repo")
+    args = parse_args(["--provider", "bitbucket", "--output", "unused",
+                       "--bitbucket-repository", "explicit/repo",
+                       "--bitbucket-branch", "main", "--bitbucket-pipeline", "noop"])
+    assert args.bitbucket_repository == "explicit/repo"
+    assert not args.allow_remote_writes
+    monkeypatch.setenv("E2E_ALLOW_WRITES", "yes")
+    with pytest.raises(RuntimeError, match="--allow-remote-writes"):
+        run(args)
+
+
+def test_live_runner_uses_v1_connector_environment(monkeypatch, tmp_path):
+    monkeypatch.setenv("BITBUCKET_EMAIL", "legacy@example.com")
+    monkeypatch.setenv("BITBUCKET_TOKEN", "legacy-token")
+    args = parse_args(["--provider", "bitbucket", "--output", str(tmp_path / "evidence"),
+                       "--allow-remote-writes", "--bitbucket-repository", "explicit/repo",
+                       "--bitbucket-branch", "main", "--bitbucket-pipeline", "noop"])
+    with pytest.raises(RuntimeError, match="BITBUCKET_ACCOUNT_EMAIL"):
+        run(args)
+
+
+@pytest.mark.parametrize("provider", ["jira", "bitbucket", "all"])
+def test_live_runner_requires_explicit_destinations(provider):
+    with pytest.raises(SystemExit) as exc:
+        parse_args(["--provider", provider, "--output", "unused", "--allow-remote-writes"])
+    assert exc.value.code == 2
 
 
 def test_development_compose_uses_role_specific_healthchecks():
