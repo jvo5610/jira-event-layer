@@ -113,6 +113,7 @@ export const messages: Record<string, [string, string]> = {
   "Probar condiciones": ["Probar condiciones", "Test conditions"],
   "CONFIGURACIÓN DEL MÓDULO": ["PASO", "STEP"],
   "Agregar una acción": ["Agregar acción", "Add action"],
+  "Agregar: {action}": ["Agregar: {action}", "Add: {action}"],
   Acción: ["Acción", "Action"],
   Disparador: ["Disparador", "Trigger"],
   Condiciones: ["Condiciones", "Conditions"],

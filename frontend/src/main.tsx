@@ -60,6 +60,7 @@ import {
   yaml,
 } from "./model";
 import "./style.css";
+import { ActionLibrary } from "./ActionLibrary";
 
 const Canvas = lazy(() => import("./Canvas"));
 const FieldCache = new Map<
@@ -1019,36 +1020,7 @@ function App() {
                           "Todos los módulos ejecutables del contrato automation/v1. Sin routers o conexiones que el motor no soporte.",
                         ) + " "}
                       </p>
-                      <div className="module-library">
-                        {definitions.map((def) => {
-                          const type = def.properties.type.const;
-                          return (
-                            <button
-                              key={type}
-                              className="library-module"
-                              onClick={() => addAction(def)}
-                            >
-                              <span
-                                className={
-                                  "app-icon " +
-                                  (type.startsWith("bitbucket") ? "bb" : "")
-                                }
-                              >
-                                {type.startsWith("bitbucket") ? (
-                                  <GitBranch size={19} />
-                                ) : (
-                                  <Layers3 size={19} />
-                                )}
-                              </span>
-                              <span>
-                                <strong>{t(actionLabels[type])}</strong>
-                                <small>{type}</small>
-                              </span>
-                              <Plus size={16} />
-                            </button>
-                          );
-                        })}
-                      </div>
+                      <ActionLibrary definitions={definitions} onAdd={addAction} />
                     </>
                   ) : action && definition ? (
                     <>
