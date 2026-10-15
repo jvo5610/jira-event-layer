@@ -1002,7 +1002,7 @@ main {
 }
 .data-option .data-option-path {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
+  font-size: 11px;
   overflow-wrap: anywhere;
 }
 .data-option .data-option-types {

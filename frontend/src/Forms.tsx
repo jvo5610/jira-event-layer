@@ -9,38 +9,6 @@ import {
   relativeSuggestions,
 } from "./model";
 
-const fieldLabels: Record<string, string> = {
-  "issue.key": "Clave del ticket",
-  "issue.id": "ID del ticket",
-  "issue.fields": "Campos del ticket",
-  "issue.fields.summary": "Título",
-  "issue.fields.description": "Descripción",
-  "issue.fields.labels": "Etiquetas",
-  "issue.fields.project.key": "Proyecto",
-  "issue.fields.project.name": "Nombre del proyecto",
-  "issue.fields.issuetype.name": "Tipo de ticket",
-  "issue.fields.issuetype.id": "ID del tipo de ticket",
-  "issue.fields.status.name": "Estado",
-  "issue.fields.status.id": "ID del estado",
-  "issue.fields.priority.name": "Prioridad",
-  "issue.fields.priority.id": "ID de prioridad",
-  "issue.fields.parent.key": "Ticket padre",
-  "issue.fields.parent.fields.issuetype.name": "Tipo del ticket padre",
-  "issue.fields.duedate": "Fecha de vencimiento",
-  "issue.fields.assignee.displayName": "Asignado a",
-  "issue.fields.created": "Fecha de creación",
-  "issue.fields.updated": "Última modificación",
-  "changelog.items": "Campos modificados",
-  "comment.body": "Contenido del comentario",
-  "comment.id": "ID del comentario",
-  field: "Campo modificado",
-  fromString: "Valor anterior",
-  toString: "Valor nuevo",
-};
-function describePath(path: string) {
-  return t(fieldLabels[path] ?? fieldLabels["issue." + path] ?? path);
-}
-
 export type Suggestion = {
   path: string;
   types: string[];
@@ -53,12 +21,6 @@ export type Suggestion = {
   example_truncated?: boolean;
 };
 export function SuggestionDetails({ suggestion: s }: { suggestion: Suggestion }) {
-  const typeNames: Record<string, string> = {
-    string: t("Texto"), number: t("Número"), boolean: t("Booleano"),
-    object: t("Objeto"), array: t("Lista"), null: t("Sin valor observado"),
-  };
-  const concreteTypes = s.types.filter((type) => type !== "null");
-  const types = concreteTypes.length ? concreteTypes : s.types;
   let preview = t("Sin ejemplo disponible");
   if (s.example_state === "empty") preview = t("Sin datos en la muestra");
   if (s.example_state === "protected") preview = t("Valor protegido");
@@ -67,19 +29,23 @@ export function SuggestionDetails({ suggestion: s }: { suggestion: Suggestion })
       ? t("Objeto con {count} campos", { count: s.example_count ?? 0 })
       : s.example_kind === "array"
         ? t("Lista con {count} elementos", { count: s.example_count ?? 0 })
-        : String(s.example ?? "") + (s.example_truncated ? "…" : "");
+        : JSON.stringify(s.example ?? null) + (s.example_truncated ? "…" : "");
     preview = t("Ejemplo: {value}", { value });
   }
   return (
     <>
-      <small className="data-option-path">{s.path}</small>
+      <span className="data-option-path">{s.path}</span>
       <small className="data-option-types">
-        {s.origin ?? types.map((type) => typeNames[type] ?? type).join(" · ")}
-        {!s.origin && concreteTypes.length > 0 && s.types.includes("null") && t(" · puede venir vacío")}
+        {s.origin ?? s.types.join(" · ")}
       </small>
       {!s.origin && <small className="data-option-example">{preview}</small>}
     </>
   );
+}
+export function filterSuggestions(suggestions: Suggestion[], search: string) {
+  return suggestions
+    .filter((s) => s.path.toLowerCase().includes(search.toLowerCase()))
+    .slice(0, 60);
 }
 export function JsonInput({
   value,
@@ -135,13 +101,7 @@ export function PathInput({
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const matches = suggestions
-    .filter((s) =>
-      (s.path + " " + describePath(s.path))
-        .toLowerCase()
-        .includes(search.toLowerCase()),
-    )
-    .slice(0, 60);
+  const matches = filterSuggestions(suggestions, search);
   return (
     <div className="field path-field">
       <label>{t(label)}</label>
@@ -186,7 +146,6 @@ export function PathInput({
                 setOpen(false);
               }}
             >
-              <span>{describePath(s.path)}</span>
               <SuggestionDetails suggestion={s} />
             </button>
           ))}
