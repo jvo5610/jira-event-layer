@@ -192,7 +192,9 @@ Ingesta: {"source":"jira","event_type":"jira:issue_updated","payload":{...}}.
 
 ## YAML y filtros
 
-Ver examples/repository-request.yaml. DSL automation/v1 / Rule; name identifica una regla.
+Ver `examples/repository-request.yaml` para un flujo breve y
+`examples/all-v1-variations.yaml` como catálogo comentado de todas las variantes v1.
+DSL automation/v1 / Rule; name identifica una regla.
 Trigger source+event y when con all/any/not/some. Predicados: eq/ne/in/contains/exists/gt/gte/lt/lte.
 Paths son referencias relativas al objeto leído, sin prefijo `$`: `issue.key`, `changelog.items`.
 `some` evalúa `where` sobre cada elemento de la lista, no sobre el evento completo.
@@ -352,6 +354,8 @@ Integración: crear la base dedicada automation_test en Postgres local y ejecuta
     TEST_DATABASE_URL=postgresql://automation:local-test-only@127.0.0.1:55439/automation_test uv run pytest -q
 
 Las pruebas rechazan bases con otro nombre; nunca ejecutarlas contra la base del despliegue.
+Las pruebas de migraciones crean bases y un rol temporales en ese servidor: usar PostgreSQL
+descartable con permisos CREATEDB/CREATEROLE (o el superusuario de `tools/selftest.py`).
 Usan Postgres real y mock HTTP del proveedor para fallos controlados. Eso no sustituye la prueba E2E con Jira/Bitbucket reales.
 
 ## Instalación portable
@@ -420,6 +424,46 @@ en los manifests como fuente de verdad. Los despliegues particulares no deben co
   YAML de reglas y auditoría se conservan; no incluir secretos en literales. El operador agenda el comando
   con su scheduler, no se agrega un daemon ni cron interno.
 
+### Migraciones de PostgreSQL
+
+V1 parte de una única base inicial: `app/migrations/001_initial.sql`. No adopta tablas
+preexistentes ni historiales del prototipo. La primera instalación exige un esquema `public`
+vacío; no se borran ni convierten bases anteriores automáticamente.
+
+Cada cambio posterior agrega un archivo SQL consecutivo: `002_<nombre>.sql`, `003_<nombre>.sql`, etc.
+Los nombres usan tres dígitos y letras minúsculas/guiones bajos. No modificar archivos ya aplicados,
+ni insertar migraciones antes de otras publicadas. No se permiten huecos o números repetidos.
+
+```bash
+# Consulta de solo lectura: valida y lista aplicadas/pendientes.
+python -m app.migrate --status
+
+# Aplica únicamente las pendientes usando el DSN del propietario.
+python -m app.migrate
+```
+
+Ambos comandos leen `DATABASE_URL` o `DATABASE_URL_FILE` y `TENANT_ID`. El servicio `migrate`
+de Compose usa el secreto `migration_database_url`; API/worker usan el de runtime.
+
+Antes de ejecutar SQL nuevo, el migrador verifica todo el historial: debe ser un prefijo exacto
+de la release y cada SHA-256 debe coincidir con los bytes del archivo original. Un checksum
+diferente detiene el proceso: no reaplica SQL ni modifica el historial para ocultar diferencias.
+Se comprueba también el tenant y la huella estructural registrada por la última migración.
+Esta segunda huella cubre tablas/vistas, columnas/tipos/defaults/nullability, restricciones,
+índices, configuración de secuencias, triggers y políticas RLS del esquema `public`.
+Detecta, por ejemplo, una restricción de deduplicación eliminada manualmente. No es una auditoría
+de roles/permisos, funciones o extensiones. Datos, valores actuales de secuencias, propietarios y
+GRANTs no forman parte de la huella. Cambios manuales de índices también requieren investigación.
+
+El migrador toma un advisory lock transaccional. Todo el lote pendiente, incluyendo sus registros
+y huellas, se confirma junto. Ante un error se revierte ese lote; las migraciones ya confirmadas
+permanecen intactas. API/worker validan historial y estructura al arrancar, sin aplicar DDL.
+La huella usa definiciones de los catálogos PostgreSQL: ensayar upgrades de versión mayor y
+comparar definiciones si cambia; no sobrescribir automáticamente la huella almacenada.
+
+Las migraciones son para una ventana de mantenimiento. SQL que exige ejecutarse fuera de una
+transacción, como `CREATE INDEX CONCURRENTLY`, no es compatible con este ejecutor.
+
 Actualización: fijar digest de imagen, detener ingreso y drenar/detener workers, tomar backup verificado,
 ejecutar migraciones con el propietario y volver a conceder permisos sobre objetos nuevos; arrancar la
 imagen correspondiente y verificar probes. No mezclar workers de releases incompatibles. Los scripts SQL
@@ -429,7 +473,7 @@ correspondiente, conservando tenant y claves. Antes de reanudar escrituras recon
 al backup: restaurar estado local NO revierte acciones que ya ocurrieron en Jira/Bitbucket.
 
 Prueba reproducible sin proveedores: `uv run python tools/smoke_container.py --image automation-api:1.0.0`.
-Crea infraestructura Docker efímera propia, prueba migración/upgrade/roles/reinicio/backup y la elimina al terminar.
+Crea infraestructura Docker efímera propia, prueba migración/rechazo de esquemas ajenos/roles/reinicio/backup y la elimina al terminar.
 No usa .env, credenciales personales ni bases existentes. Los tests de conectores no equivalen a certificación cloud.
 También levanta el Compose distribuido con secretos montados y verifica la separación de rutas.
 Bitbucket Pipelines ejecuta la suite y pip-audit en pushes y pull requests; no publica ni despliega imágenes.

@@ -1,7 +1,7 @@
 """Disposable Docker acceptance test; no personal credentials, cloud or provider calls.
 
 Creates only uniquely named test containers/network and removes those in finally.
-Checks fresh install, legacy adoption, restricted DB role, backup/restore, probes,
+Checks fresh install, unmanaged-schema rejection, restricted DB role, backup/restore, probes,
 signed ingress, deduplication, private API, restart and graceful worker shutdown.
 """
 import argparse
@@ -113,10 +113,13 @@ def main():
                 conn.execute(Path("app/migrations/001_initial.sql").read_text())
                 conn.execute("INSERT INTO events(id,tenant,source,delivery_id,event_type,payload,raw_body,sha256) VALUES(%s,'portable-smoke','test','legacy','test','{}',%s,%s)",
                              (uuid.uuid4(), b"{}", hashlib.sha256(b"{}").hexdigest()))
-            one_shot("migrate-legacy", {**migration, "DATABASE_URL": owner_internal.replace("/automation_test", "/automation_legacy")}, "python", "-m", "app.migrate")
+            rejected = command("docker", "run", "--rm", "--network", name,
+                               "--env-file", envfile("unmanaged", {**migration, "DATABASE_URL": owner_internal.replace("/automation_test", "/automation_legacy")}),
+                               "--no-healthcheck", args.image, "python", "-m", "app.migrate", check=False)
+            assert rejected.returncode != 0 and b"automatic adoption is not supported" in rejected.stderr
             with psycopg.connect(owner_url.replace("/automation_test", "/automation_legacy")) as conn:
                 assert conn.execute("SELECT count(*) FROM events WHERE delivery_id='legacy'").fetchone()[0] == 1
-            passed.append("legacy_upgrade_preserves_events")
+            passed.append("unmanaged_schema_rejected_without_data_loss")
 
             common = {"TENANT_ID": "portable-smoke", "DATABASE_URL": runtime_internal}
             management = container("api", {**common, "API_SURFACE": "management", "ADMIN_TOKEN": admin_token,

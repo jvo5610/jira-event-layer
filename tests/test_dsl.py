@@ -73,6 +73,31 @@ def test_all_published_yaml_examples_validate(example):
     parse_rule(example.read_text())
 
 
+def test_complete_v1_catalog_covers_every_operator_and_action():
+    raw = yaml.safe_load(Path("examples/all-v1-variations.yaml").read_text())
+    rule, _ = parse_rule(Path("examples/all-v1-variations.yaml").read_text())
+
+    def operators(node):
+        if "all" in node or "any" in node:
+            key = "all" if "all" in node else "any"
+            return {op for child in node[key] for op in operators(child)}
+        if "not" in node:
+            return operators(node["not"])
+        if "some" in node:
+            return operators(node["some"]["where"])
+        return {node["op"]}
+
+    assert operators(raw["when"]) == {
+        "eq", "ne", "in", "contains", "exists", "gt", "gte", "lt", "lte"
+    }
+    assert {action.type for action in rule.actions} == {
+        "bitbucket.pipeline", "jira.issue.create", "jira.issue.clone",
+        "jira.issue.edit", "jira.issue.transition", "jira.comment.add",
+        "jira.issue.link", "jira.issue.get",
+    }
+    assert len(rule.actions) == 10
+
+
 def test_literal_field_pipeline_example():
     rule, _ = parse_rule(Path("examples/literal-field-repository.yaml").read_text())
     event = {"issue": {"key": "KAN-8", "fields": {"project": {"key": "KAN"},

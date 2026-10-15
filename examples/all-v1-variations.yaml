@@ -1,0 +1,178 @@
+# Catálogo ejecutable del contrato automation/v1.
+#
+# Este archivo es deliberadamente exhaustivo: muestra todas las estructuras de
+# filtro, todos los operadores, las tres formas de path, todas las formas de
+# binding y los ocho tipos de acción. El parser real lo valida en la suite.
+#
+# Antes de activarlo en una instalación real:
+#   1. reemplazar IDs de tipos, estados, vínculo y accountId por los del sitio;
+#   2. habilitar customfield_10090..10093 en ALLOWED_JIRA_FIELDS o quitarlos;
+#   3. confirmar workspace, repositorio, branch y nombre del pipeline;
+#   4. simularlo con un evento representativo.
+apiVersion: automation/v1
+kind: Rule
+name: catalogo-completo-v1
+description: Referencia ejecutable de filtros, referencias, valores, pasos y acciones de automation/v1.
+
+# Nivel 1: el trigger acepta eventos de Jira o del origen sintético "test".
+# Para producción normalmente se usa jira. Cambiarlo a test permite ejercitar
+# exactamente la misma regla sin aceptar un webhook real.
+trigger:
+  source: jira
+  event: jira:issue_updated
+
+# Nivel 2: filtros. all, any, not y some se pueden anidar.
+when:
+  all:
+    # eq: igualdad estricta (también compara el tipo JSON).
+    - {path: issue.fields.project.key, op: eq, value: KAN}
+
+    # contains sobre un array.
+    - {path: issue.fields.labels, op: contains, value: automation-lab-repository}
+
+    # exists sin value equivale a exists: true.
+    - {path: issue.fields.summary, op: exists}
+
+    # not niega cualquier filtro hijo.
+    - not:
+        {path: issue.fields.labels, op: contains, value: automation-disabled}
+
+    # any requiere que al menos una alternativa coincida.
+    - any:
+        - {path: issue.fields.priority.name, op: eq, value: High}
+        - {path: issue.fields.priority.name, op: ne, value: Lowest}
+        - {path: issue.fields.status.name, op: in, value: [Done, Finalizado]}
+
+    # contains también opera sobre texto.
+    - any:
+        - {path: issue.fields.summary, op: contains, value: "[AUTO]"}
+        - {path: issue.key, op: exists, value: true}
+
+    # Paths: clave simple, clave literal con punto y primer elemento de array.
+    - any:
+        - {path: 'issue.fields["repository.name"][0].value', op: exists}
+        - {path: issue.key, op: exists}
+
+    # Comparaciones numéricas. La última rama deja el campo opcional: si no
+    # existe, el grupo any igualmente coincide.
+    - any:
+        - {path: issue.fields.customfield_10090, op: gt, value: 80}
+        - {path: issue.fields.customfield_10090, op: gte, value: 80}
+        - {path: issue.fields.customfield_10090, op: lt, value: 20}
+        - {path: issue.fields.customfield_10090, op: lte, value: 20}
+        - {path: issue.fields.customfield_10090, op: exists, value: false}
+
+    # some recorre un array. Dentro de where, cada path es relativo al item.
+    - some:
+        path: changelog.items
+        where:
+          all:
+            - {path: field, op: eq, value: status}
+            - {path: from, op: ne, value: null}
+
+# Nivel 3: acciones. El límite por regla es 10; este catálogo usa las 10 para
+# cubrir los ocho tipos disponibles y variantes importantes.
+actions:
+  # 0. Lee el estado actual de Jira y aplica un guard sobre esa respuesta.
+  - type: jira.issue.get
+    issue: "${issue.key}"
+    require:
+      all:
+        - {path: fields.labels, op: contains, value: automation-managed}
+        - {path: fields.status.id, op: in, value: ["10001", "10003"]}
+
+  # 1. Crea un issue. Los bindings de fields preservan tipos JSON cuando la
+  # referencia ocupa todo el valor.
+  - type: jira.issue.create
+    project: KAN
+    issue_type_id: "10003"
+    fields:
+      # Template embebido: siempre produce texto.
+      summary: "Derivado de ${issue.key}: ${issue.fields.summary}"
+      # Path explícito: copia el valor JSON exacto, sin default.
+      description: {path: issue.fields.description}
+      # Template completo: preserva el array original.
+      labels: "${issue.fields.labels}"
+      # Value explícito: objeto literal; no interpola su contenido.
+      priority: {value: {id: "3"}}
+      # String corto sin ${...}: literal.
+      duedate: "2026-12-31"
+      # Otros tipos literales válidos en custom fields.
+      customfield_10090: 42
+      customfield_10091: true
+      customfield_10092: [backend, urgente]
+      customfield_10093: {value: null}
+
+  # 2. La misma acción crea un subtask al agregar parent. _steps indexa los
+  # resultados de acciones anteriores desde cero.
+  - type: jira.issue.create
+    project: KAN
+    issue_type_id: "10004"
+    parent: '${_steps["1"].key}'
+    fields:
+      summary: "Subtarea de ${_steps[\"1\"].key}"
+
+  # 3. Un escape $${ entrega ${...} como texto literal.
+  - type: jira.comment.add
+    issue: '${_steps["1"].key}'
+    text: 'Origen ${issue.key}; ejemplo escapado: $${issue.key}'
+
+  # 4. Edita campos permitidos. accountId debe reemplazarse antes de ejecutar.
+  - type: jira.issue.edit
+    issue: '${_steps["1"].key}'
+    fields:
+      summary: "[Procesado] ${issue.fields.summary}"
+      assignee: {value: {accountId: replace-with-real-account-id}}
+
+  # 5. Transición con estado de origen opcional y fields en la misma operación.
+  - type: jira.issue.transition
+    issue: '${_steps["1"].key}'
+    from_status_id: "10000"
+    to_status_id: "10001"
+    fields:
+      priority: {value: {id: "3"}}
+
+  # 6. Clona campos seleccionados y permite sobreescribir otros.
+  - type: jira.issue.clone
+    source: '${_steps["1"].key}'
+    project: KAN
+    issue_type_id: "10003"
+    copy_fields: [summary, description, labels]
+    fields:
+      summary: "Copia de ${_steps[\"1\"].key}"
+
+  # 7. Vincula dos issues ya disponibles.
+  - type: jira.issue.link
+    inward: '${_steps["1"].key}'
+    outward: '${_steps["6"].key}'
+    link_type_id: "10000"
+
+  # 8. Otro guard, esta vez sobre el clon.
+  - type: jira.issue.get
+    issue: '${_steps["6"].key}'
+    require:
+      any:
+        - {path: fields.status.id, op: eq, value: "10000"}
+        - {path: fields.status.id, op: eq, value: "10001"}
+
+  # 9. Dispara un pipeline. Las variables aceptan literal corto, template,
+  # path+default y value explícito. Los secretos nunca se declaran aquí.
+  - type: bitbucket.pipeline
+    workspace: jvidelaolmos
+    repository: jira-event-layer-lab
+    branch: main
+    pipeline: setup-new-repository
+    variables:
+      SHORT_LITERAL: python
+      COMPLETE_REFERENCE: "${issue.key}"
+      EMBEDDED_REFERENCE: "Solicitud ${issue.key}: ${issue.fields.summary}"
+      LITERAL_KEY_AND_INDEX:
+        path: 'issue.fields["repository.name"][0].value'
+        default: fallback-repository
+      ARRAY_INDEX_WITH_DEFAULT:
+        path: issue.fields.components[0].name
+        default: unclassified
+      EXPLICIT_LITERAL:
+        value: "${not-interpolated}"
+      ESCAPED_TEMPLATE: '$${issue.key}'
+      PREVIOUS_STEP: '${_steps["6"].key}'
