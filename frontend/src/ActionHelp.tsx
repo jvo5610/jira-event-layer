@@ -7,6 +7,7 @@ export function ActionHelpContent({ actions, index }: { actions: Obj[]; index: n
   const readIndex = prior.map(a => a.type).lastIndexOf("jira.issue.get");
   const previous = prior.map(a => Boolean(actionOutputKeys[a.type]?.includes("key"))).lastIndexOf(true);
   return <div className="action-help-content">
+    {action.type === "jira.issue.edit" && <p>{t("Escribí una clave Jira o abrí { } y elegí el dato que contiene la clave. Por ejemplo issue.fields.parent.key edita el padre del ticket del evento.")}</p>}
     <p>{t("Cada acción guarda su resultado al terminar. Los pasos siguientes pueden leerlo; los anteriores no.")}</p>
     <h4>{t("Resultado de este paso")}</h4>
     <code>_steps["{index}"]</code>
@@ -14,10 +15,10 @@ export function ActionHelpContent({ actions, index }: { actions: Obj[]; index: n
     <p className="muted">{t("Son campos posibles: algunos aparecen solo si hubo cambios. Crear o clonar devuelve la key, no todos los campos del ticket; agregá Consultar ticket para leerlos.")}</p>
     <h4>{t("Usar un resultado anterior")}</h4>
     {index === 0 ? <p>{t("Este es el primer paso: todavía no hay resultados anteriores. Podés usar datos del evento, como issue.key.")}</p> : <>
-      <p>{t("Elegí Datos y abrí { } para seleccionar un resultado de un paso anterior. Se conserva el tipo original del valor.")}</p>
+      <p>{t("Abrí { } junto al valor para elegir datos del evento o de pasos anteriores. Para mezclar texto y datos usá ${…}; las opciones técnicas están en Avanzadas.")}</p>
       {previous >= 0 && <p>{t("Ticket del paso {step}", { step: previous + 1 })}: <code>{`_steps["${previous}"].key`}</code></p>}
       {readIndex >= 0 && <p>{t("Resumen consultado en el paso {step}", { step: readIndex + 1 })}: <code>{`_steps["${readIndex}"].fields.summary`}</code></p>}
-      <p>{t("Para mezclar texto y datos, elegí Plantilla. Por ejemplo:")}</p>
+      <p>{t("Para mezclar texto y datos, escribí el texto con referencias. Por ejemplo:")}</p>
       <pre>{previous >= 0 ? `Ticket: ${'${'}_steps["${previous}"].key}` : `Resultado: ${'${'}_steps["${index - 1}"].${actionOutputKeys[actions[index - 1].type]?.[0] ?? "result"}}`}</pre>
     </>}
     <p>{t("Paso 1 corresponde a _steps[\"0\"], paso 2 a _steps[\"1\"]. issue.fields siempre lee el evento original, no los cambios de una acción anterior.")}</p>

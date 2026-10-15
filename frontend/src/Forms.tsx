@@ -14,6 +14,7 @@ export type Suggestion = {
   types: string[];
   values?: any[];
   origin?: string;
+  availability?: "declared" | "observed";
   example_state?: "present" | "empty" | "protected";
   example?: string | number | boolean;
   example_kind?: "value" | "object" | "array";
@@ -21,7 +22,7 @@ export type Suggestion = {
   example_truncated?: boolean;
 };
 export function SuggestionDetails({ suggestion: s }: { suggestion: Suggestion }) {
-  let preview = t("Sin ejemplo disponible");
+  let preview = s.availability === "declared" ? t("Salida disponible al ejecutar; todavía no hay un valor observado.") : t("Sin ejemplo disponible");
   if (s.example_state === "empty") preview = t("Sin datos en la muestra");
   if (s.example_state === "protected") preview = t("Valor protegido");
   if (s.example_state === "present") {
@@ -38,14 +39,88 @@ export function SuggestionDetails({ suggestion: s }: { suggestion: Suggestion })
       <small className="data-option-types">
         {s.origin ?? s.types.join(" · ")}
       </small>
-      {!s.origin && <small className="data-option-example">{preview}</small>}
+      <small className="data-option-example">{preview}</small>
     </>
   );
 }
 export function filterSuggestions(suggestions: Suggestion[], search: string) {
   return suggestions
-    .filter((s) => s.path.toLowerCase().includes(search.toLowerCase()))
+    .filter((s) => s.path.toLowerCase().includes(search.toLowerCase()) || s.origin?.toLowerCase().includes(search.toLowerCase()))
     .slice(0, 60);
+}
+function DataPicker({ suggestions, onChoose, onClose }: {
+  suggestions: Suggestion[]; onChoose: (path: string) => void; onClose: () => void;
+}) {
+  const [search, setSearch] = useState("");
+  const prior = filterSuggestions(suggestions.filter(s => s.origin), search).slice(0, 30);
+  const event = filterSuggestions(suggestions.filter(s => !s.origin), search).slice(0, 30);
+  const matches = [...prior, ...event];
+  return <div className="data-picker">
+    <div className="picker-head">{t("Datos disponibles")}
+      <button aria-label={t("Cerrar selector")} onClick={onClose}>×</button>
+    </div>
+    <input autoFocus aria-label={t("Buscar campo")} placeholder={t("Buscar un campo…")}
+      value={search} onChange={e => setSearch(e.target.value)} />
+    {[[t("Acciones anteriores"), prior], [t("Datos del evento"), event]].map(([heading, items]) =>
+      (items as Suggestion[]).length > 0 && <section key={String(heading)} className="context-data-group">
+        <h5>{String(heading)}</h5>
+        {(items as Suggestion[]).map(s => <button className="data-option" key={s.path} onClick={() => onChoose(s.path)}>
+          <SuggestionDetails suggestion={s} />
+        </button>)}
+      </section>)}
+    {!matches.length && <p className="muted">{t("Sin coincidencias. Podés escribir una referencia en las opciones avanzadas.")}</p>}
+    <small className="muted">{t("Campos observados, no un esquema obligatorio. Solo se cargan 60 coincidencias.")}</small>
+  </div>;
+}
+
+export function enteredBinding(text: string): Obj {
+  return text.includes("${") ? { template: text } : { value: text };
+}
+
+export function SingleValueEditor({ value, onChange, suggestions, label, target = false, typed = false, onRemove }: {
+  value: any; onChange: (v: any) => void; suggestions: Suggestion[]; label: string;
+  target?: boolean; typed?: boolean; onRemove?: () => void;
+}) {
+  const [picker, setPicker] = useState(false);
+  const [advanced, setAdvanced] = useState(false);
+  const mode = bindingMode(value);
+  const current = bindingValue(value);
+  const reference = mode === "path";
+  const structured = mode === "value" && typeof current !== "string";
+  const targetSuggestions: Suggestion[] = [...suggestions];
+  if (target) for (const path of ["issue.key", "issue.fields.parent.key"]) {
+    if (!targetSuggestions.some(s => s.path === path)) targetSuggestions.push({ path, types: ["string"] });
+  }
+  const options = target ? targetSuggestions.filter(s => !s.types.length || s.types.includes("string")) : suggestions;
+  return <div className="single-value binding">
+    <div className="field-heading"><span>{t(label)}</span>
+      {onRemove && <button className="icon-button" aria-label={t("Quitar campo")} onClick={onRemove}><Trash2 size={14} /></button>}
+    </div>
+    <div className="input-action">
+      {target ? <input aria-label={t(label)} value={reference ? current ?? "" : structured ? JSON.stringify(current) : current ?? ""}
+        readOnly={reference || structured} placeholder={t("Escribí una clave Jira, por ejemplo KAN-45")}
+        onChange={e => onChange(enteredBinding(e.target.value))} />
+        : <textarea aria-label={t(label)} rows={3} value={structured ? JSON.stringify(current) : current ?? ""}
+          readOnly={reference || structured} placeholder={t("Escribí el nuevo valor o elegí un dato")}
+          onChange={e => onChange(enteredBinding(e.target.value))} />}
+      {(reference || structured) && <button aria-label={t("Quitar dato seleccionado")} title={t("Quitar dato seleccionado")}
+        onClick={() => onChange({ value: "" })}>×</button>}
+      <button aria-label={t("Elegir dato para {field}", {field: t(label)})} title={t("Elegir dato")}
+        aria-expanded={picker} onClick={() => setPicker(!picker)}><Braces size={16} /></button>
+    </div>
+    {reference && <small className="muted">{t("Dato seleccionado: se usará su valor al ejecutar, no el nombre de la ruta.")}</small>}
+    {mode === "template" && <small className="muted">{t("Las referencias ${…} se reemplazan al ejecutar.")}</small>}
+    {structured && <small className="muted">{t("Valor JSON. Podés editarlo en las opciones avanzadas.")}</small>}
+    {target && <small className="muted">{t("Debe resolver a una sola clave Jira. Para editar el padre, elegí issue.fields.parent.key. No admite búsquedas ni listas.")}</small>}
+    {target && reference && <small className="muted">{t("Si el dato no existe o no es una clave Jira, la acción falla sin editar otro ticket.")}</small>}
+    {picker && <DataPicker suggestions={options} onClose={() => setPicker(false)} onChoose={path => {
+      onChange({ path }); setPicker(false);
+    }} />}
+    <details onToggle={e => setAdvanced(e.currentTarget.open)}>
+      <summary>{t("Opciones avanzadas")}</summary>
+      {advanced && <BindingEditor value={value} onChange={onChange} suggestions={suggestions} label={label} typed={typed} />}
+    </details>
+  </div>;
 }
 export function JsonInput({
   value,
@@ -566,19 +641,25 @@ function BindingMap({
   suggestions,
   typed,
   title,
+  editing = false,
 }: {
   value: Obj;
   onChange: (v: Obj) => void;
   suggestions: Suggestion[];
   typed: boolean;
   title: string;
+  editing?: boolean;
 }) {
   const [key, setKey] = useState("");
+  const [custom, setCustom] = useState(false);
   return (
     <section className="map-editor">
-      <h4>{t(title)}</h4>
+      <h4>{editing ? t("Campos a modificar") : t(title)}</h4>
+      {editing && <p className="muted">{t("Elegí el campo y cargá su nuevo valor. Reemplaza el contenido actual; no agrega texto al final.")}</p>}
       {Object.entries(value ?? {}).map(([name, binding]) => (
-        <BindingEditor
+        typed ? <SingleValueEditor key={name} label={name} value={binding} typed
+          suggestions={suggestions} onChange={v => onChange({ ...value, [name]: v })}
+          onRemove={() => { const next = { ...value }; delete next[name]; onChange(next); }} /> : <BindingEditor
           key={name}
           label={name}
           value={binding}
@@ -593,7 +674,21 @@ function BindingMap({
           }}
         />
       ))}
-      <div className="input-action">
+      {typed && <label className="field">{t("Agregar campo")}
+        <select aria-label={t("Agregar campo")} value={custom ? "__custom" : ""} onChange={e => {
+          const name = e.target.value;
+          if (name === "__custom") { setCustom(true); setKey(""); return; }
+          setCustom(false);
+          if (!name) return;
+          onChange({ ...value, [name]: { value: name === "labels" ? [] : ["priority", "assignee"].includes(name) ? {} : "" } });
+          setKey("");
+        }} disabled={Object.keys(value ?? {}).length >= 30}>
+          <option value="">{t("Elegí el campo que querés modificar…")}</option>
+          {["summary", "description", "labels", "priority", "assignee", "duedate"].filter(name => !Object.hasOwn(value ?? {}, name)).map(name => <option key={name} value={name}>{name}</option>)}
+          <option value="__custom">customfield_N</option>
+        </select>
+      </label>}
+      {(!typed || custom) && <div className="input-action">
         <input
           aria-label={t("Nuevo ") + title}
           placeholder={
@@ -605,18 +700,19 @@ function BindingMap({
         <button
           aria-label={t("Agregar ") + title}
           disabled={
-            !key ||
+            !key || (typed && !/^customfield_[0-9]+$/.test(key)) ||
             Object.hasOwn(value ?? {}, key) ||
             Object.keys(value ?? {}).length >= (typed ? 30 : 50)
           }
           onClick={() => {
             onChange({ ...value, [key]: { value: "" } });
             setKey("");
+            setCustom(false);
           }}
         >
           <Plus size={17} />
         </button>
-      </div>
+      </div>}
       {typed && (
         <small className="muted">
           {t(
@@ -669,8 +765,13 @@ export function ActionEditor({
                 onChange={(v) => set(key, v)}
                 suggestions={suggestions}
                 typed={key === "fields"}
+                editing={action.type === "jira.issue.edit"}
               />
             );
+          if (["issue", "source", "parent", "inward", "outward"].includes(key) && action[key] != null)
+            return <SingleValueEditor key={key} label={key === "issue" ? (action.type === "jira.issue.edit" ? "Ticket a editar" : "Ticket") : labels[key] ?? key}
+              value={action[key]} target suggestions={suggestions} onChange={v => set(key, v)}
+              onRemove={!definition.required?.includes(key) ? () => { const next = {...action}; delete next[key]; onChange(next); } : undefined} />;
           if (key === "require")
             return (
               <section key={key}>

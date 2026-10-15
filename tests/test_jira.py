@@ -102,6 +102,30 @@ def test_reject_target_before_any_request(key):
         adapter.execute(rule_for([spec]).actions[0], {}, IDENTITY, lambda: pytest.fail("write forbidden"))
 
 
+@pytest.mark.parametrize('value', [None, ['DEMO-4','DEMO-5'], {'key':'DEMO-4'}, 10004, '', 'project=DEMO', 'DEMO-4,DEMO-5'])
+def test_dynamic_target_rejects_non_key_without_http_or_budget(value):
+    spec = {'type':'jira.issue.edit','issue':{'path':'issue.fields.parent.key'},
+            'fields':{'summary':{'value':'Updated'}}}
+    adapter = Jira(config(), httpx.Client(transport=httpx.MockTransport(lambda _: pytest.fail('No HTTP allowed'))))
+    with pytest.raises(RuleError):
+        adapter.execute(rule_for([spec]).actions[0], {'issue':{'fields':{'parent':{'key':value}}}},
+                        IDENTITY, lambda: pytest.fail('No budget reservation allowed'))
+
+
+def test_parent_reference_edits_only_parent_not_trigger_issue():
+    calls, budget = [], []
+    def provider(request):
+        calls.append((request.method,request.url.path))
+        assert '/DEMO-4' in request.url.path
+        return httpx.Response(200,json=issue('DEMO-4')) if request.method == 'GET' else httpx.Response(204)
+    spec = {'type':'jira.issue.edit','issue':{'path':'issue.fields.parent.key'},
+            'fields':{'summary':{'value':'Updated parent'}}}
+    adapter = Jira(config(),httpx.Client(transport=httpx.MockTransport(provider)))
+    result = adapter.execute(rule_for([spec]).actions[0],{'issue':{'key':'DEMO-9','fields':{'parent':{'key':'DEMO-4'}}}},
+                             IDENTITY,lambda:budget.append(True))
+    assert result['key']=='DEMO-4' and len(calls)==2 and budget==[True]
+
+
 @pytest.mark.parametrize("field", ["project", "status", "security", "reporter", "issuetype", "unknown"])
 def test_forbidden_fields_rejected_at_parse(field):
     action = copy.deepcopy(ACTIONS[2])

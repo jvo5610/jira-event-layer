@@ -9,10 +9,32 @@ import {
   initialAction,
   parseRule,
   previousOutputs,
+  contextCompatible,
   yaml,
 } from "./model";
 
 describe("Full v1 editor contract", () => {
+  it("merges actual nested outputs but never future or mismatched steps", () => {
+    const actions=[{type:'jira.issue.get'},{type:'jira.issue.edit'}];
+    const suggestions=previousOutputs(actions,1,[
+      {path:'_steps["0"].fields.parent.key',step:0,action_type:'jira.issue.get',types:['string'],example:'KAN-10'},
+      {path:'_steps["1"].key',step:1,action_type:'jira.issue.edit',types:['string'],example:'KAN-99'},
+      {path:'_steps["0"].forged',step:0,action_type:'bitbucket.pipeline',types:['string']},
+    ]);
+    expect(suggestions.find(s=>s.path==='_steps["0"].fields.parent.key')?.example).toBe('KAN-10');
+    expect(suggestions.some(s=>s.path.includes('forged')||s.path.startsWith('_steps["1"]'))).toBe(false);
+    expect(suggestions.find(s=>s.path==='_steps["0"].key')?.availability).toBe('declared');
+  });
+  it("invalidates historical context only when its prior prefix or trigger changes", () => {
+    const rule=parseRule(readFileSync('../examples/all-v1-variations.yaml','utf8'));
+    const basis={version:1,spec:structuredClone(rule)};
+    expect(contextCompatible(rule,basis,1)).toBe(true);
+    rule.actions[1]={type:'jira.issue.get',issue:{value:'KAN-4'}};
+    expect(contextCompatible(rule,basis,1)).toBe(true);
+    rule.actions[0]={type:'jira.issue.get',issue:{value:'KAN-4'}};
+    expect(contextCompatible(rule,basis,1)).toBe(false);
+    expect(contextCompatible(rule,null,1)).toBe(false);
+  });
   it("distinguishes ignored service events from unknown actors and ordinary errors", () => {
     expect(eventExclusionMessage({execution_blocked_reason: "ignored_service_actor"})).toContain("cuenta del servicio");
     expect(eventExclusionMessage({last_error: "held_actor_unknown"})).toContain("Retenido");

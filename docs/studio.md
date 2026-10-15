@@ -138,13 +138,50 @@ uv run --frozen python tools/smoke_studio.py --api-image automation-api:gui-chec
 Los tests verifican autenticación, secretos por archivo, rechazo de configuración insegura, límites, headers y cambios de URL/origen sin rebuild. Las pruebas del motor con PostgreSQL requieren `TEST_DB_HOST`, `TEST_DB_PORT`, `TEST_DB_NAME=automation_test`, `TEST_DB_USER` y `TEST_DB_PASSWORD` o `TEST_DB_PASSWORD_FILE`. No ejecutar una suite destructiva sobre una base operativa.
 
 `smoke_studio.py` crea una instalación Docker efímera real (PostgreSQL, API y GUI), comprueba emisión, revocación y rotaciones, y la elimina al terminar. No llama proveedores. `--serve` permite inspeccionarla antes de continuar; sus credenciales públicas de laboratorio están en `TEST_LOGIN`/`TEST_ADMIN` del script y sólo son aptas para ese entorno descartable, publicado en loopback. Esta aceptación no reemplaza una prueba de carga ni la validación del despliegue elegido.
-# Ayuda de acciones y resultados
+
+## Editar un ticket
+
+**Ticket a editar** es un único campo: escribí una clave Jira (`KAN-45`) o abrí
+`{ }` para elegir el dato que contiene esa clave. No se elige una categoría
+"resultado de otro paso": todos los datos se seleccionan desde el mismo contexto.
+Por ejemplo, `issue.fields.parent.key` apunta al padre del ticket que disparó el
+evento y `_steps["0"].fields.parent.key` al padre obtenido por una consulta anterior.
+La selección utiliza el valor de la ruta al ejecutar, no el texto de la ruta.
+Para volver a escribir una clave fija, quitá el dato seleccionado con `×`.
+
+En **Campos a modificar**, elegí `description`, `summary`, etc. desde **Agregar
+campo**: su editor de valor aparece inmediatamente. El nuevo valor reemplaza el
+actual. Podés escribir texto o usar `{ }` para tomar un dato; los valores JSON y
+controles técnicos siguen disponibles en **Opciones avanzadas**. El destino debe
+resolver a una única clave Jira; no acepta listas, JQL, IDs numéricos, referencias
+futuras ni un fallback que pueda editar otro ticket si falta el dato esperado.
+
+## Contexto y ejemplos de pasos anteriores
+
+Los selectores separan **Acciones anteriores** y **Datos del evento** y muestran
+tipos y ejemplos protegidos. Buscan por ruta raw y por el nombre del paso.
+Cuando existen ejecuciones, **Contexto disponible** identifica una ejecución de
+la misma versión con resultados anteriores al paso seleccionado: por ejemplo,
+`_steps["0"].fields.summary` con su valor observado. Se usa una sola ejecución
+coherente; nunca se mezclan salidas de distintas ejecuciones o versiones. Son
+ejemplos históricos, no una ejecución en vivo ni una simulación del flujo editado.
+
+Al modificar el trigger, los filtros o un paso previo se descarta ese contexto.
+Sin resultados, se muestran las salidas declaradas como todavía no observadas;
+no se inventan valores. **Actualizar contexto** vuelve a consultar sin ejecutar
+acciones. La consulta es bajo demanda, revisa como máximo diez ejecuciones y solo
+resultados durables `pending`/`succeeded` de pasos anteriores. Respeta redacción,
+protección de datos sensibles y límites de inspección del catálogo. No consulta
+Jira/Bitbucket ni persiste nuevas copias de payloads. La migración 005 agrega los
+índices de búsqueda; no cambia datos ni migraciones anteriores.
+
+## Ayuda de acciones y resultados
 
 Al seleccionar una acción, abrí **? Cómo usar esta acción**. La ayuda enumera sus
 resultados y muestra rutas reales de los pasos anteriores del flujo actual.
 El paso visible 1 corresponde a `_steps["0"]`: para usar el ticket consultado
-allí, elegí **Datos** y `_steps["0"].key`; para su resumen,
-`_steps["0"].fields.summary`. En **Plantilla**, usá por ejemplo
+allí, abrí `{ }` y elegí `_steps["0"].key`; para su resumen,
+`_steps["0"].fields.summary`. Para mezclar texto y datos, escribí por ejemplo
 `Ticket: ${_steps["0"].key}`. `issue.fields` sigue siendo el evento original.
 Los resultados solo están disponibles después de ejecutar el paso correspondiente.
 Una descripción ADF es un objeto: interpolarla como texto no implementa un append.

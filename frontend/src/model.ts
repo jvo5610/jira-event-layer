@@ -150,14 +150,30 @@ export const actionOutputKeys: Record<string, string[]> = {
 export function previousOutputs(
   actions: Obj[],
   index: number,
-): { path: string; types: string[]; origin: string }[] {
-  return actions.slice(0, index).flatMap((a, i) =>
+  observed: Obj[] = [],
+): { path: string; types: string[]; origin: string; availability: "declared" | "observed"; [key: string]: any }[] {
+  const declared = actions.slice(0, index).flatMap((a, i) =>
     (actionOutputKeys[a.type] ?? []).map((key) => ({
       path: `_steps["${i}"].${key}`,
       types: [],
       origin: `${i + 1} · ${actionLabels[a.type]}`,
+      availability: "declared",
     })),
   );
+  const actual = observed.filter(s => Number.isInteger(s.step) && s.step >= 0 && s.step < index
+    && actions[s.step]?.type === s.action_type
+    && s.path.startsWith(`_steps["${s.step}"].`)).map((s): Obj => ({ ...s,
+      availability: "observed", origin: `${s.step + 1} · ${t(actionLabels[s.action_type])}` }));
+  const byPath = new Map<string, any>(declared.map(s => [s.path, s]));
+  for (const item of actual) byPath.set(item.path, item);
+  return [...byPath.values()];
+}
+
+export function contextCompatible(rule: Rule, basis: Obj | null, index: number): boolean {
+  return Boolean(basis && index >= 0 && rule.name === basis.spec.name
+    && JSON.stringify(rule.trigger) === JSON.stringify(basis.spec.trigger)
+    && JSON.stringify(rule.when) === JSON.stringify(basis.spec.when)
+    && JSON.stringify(rule.actions.slice(0, index)) === JSON.stringify(basis.spec.actions.slice(0, index)));
 }
 export async function api(
   path: string,

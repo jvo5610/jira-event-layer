@@ -58,6 +58,7 @@ import {
   newRule,
   parseRule,
   previousOutputs,
+  contextCompatible,
   yaml,
 } from "./model";
 import "./style.css";
@@ -127,6 +128,11 @@ function App() {
   const [dirty, setDirty] = useState(false);
   const [versions, setVersions] = useState<Obj[]>([]);
   const [revision, setRevision] = useState<Obj | null>(null);
+  const [contextBasis, setContextBasis] = useState<Obj | null>(null);
+  const [stepContext, setStepContext] = useState<Obj | null>(null);
+  const [contextRefresh, setContextRefresh] = useState(0);
+  const [contextLoading, setContextLoading] = useState(false);
+  const [contextError, setContextError] = useState(false);
   const [activeVersion, setActiveVersion] = useState<number | null>(null);
   const [yamlOpen, setYamlOpen] = useState(false);
   const [yamlText, setYamlText] = useState("");
@@ -302,9 +308,29 @@ function App() {
       clearTimeout(timer);
     };
   }, [page, rule.trigger.source, rule.trigger.event]);
+  const contextKey = contextCompatible(rule, contextBasis, actionIndex)
+    ? `${encodeURIComponent(rule.name)}/versions/${contextBasis!.version}/context?before_step=${actionIndex}` : "";
+  useEffect(() => {
+    let canceled = false;
+    setStepContext(null); setContextError(false); setContextLoading(false);
+    if (page !== "editor" || !contextKey) return;
+    setContextLoading(true);
+    const timer = setTimeout(() => {
+      void api(`/v1/rules/${contextKey}`).then(value => {
+        if (!canceled) setStepContext({ ...value, key: contextKey });
+      }).catch(() => { if (!canceled) setContextError(true); })
+        .finally(() => { if (!canceled) setContextLoading(false); });
+    }, 200);
+    return () => { canceled = true; clearTimeout(timer); };
+  }, [page, contextKey, contextRefresh]);
+  const usableContext = stepContext?.key === contextKey ? stepContext : null;
   const suggestions = useMemo(
-    () => [...fields, ...previousOutputs(rule.actions, actionIndex)],
-    [fields, rule.actions, actionIndex],
+    () => {
+      const data = new Map(fields.map(s => [s.path, s]));
+      for (const item of usableContext?.event_fields ?? []) data.set(item.path, item);
+      return [...data.values(), ...previousOutputs(rule.actions, actionIndex, usableContext?.fields ?? [])];
+    },
+    [fields, rule.actions, actionIndex, usableContext, language],
   );
   const loadRule = async (name: string, version?: number) => {
     const history = await api(`/v1/rules/${encodeURIComponent(name)}/versions`);
@@ -314,6 +340,7 @@ function App() {
     setRule(row.spec);
     setVersions(history);
     setRevision(row);
+    setContextBasis(row);
     setDirty(false);
     setSelected("trigger");
     setTab("config");
@@ -332,6 +359,7 @@ function App() {
     if (dirty && !window.confirm(t("¿Descartar los cambios sin guardar?")))
       return;
     setRule(newRule());
+    setContextBasis(null);
     setVersions([]);
     setRevision(null);
     setActiveVersion(null);
@@ -347,6 +375,7 @@ function App() {
     const changedWhileSaving =
       JSON.stringify(ruleRef.current) !== JSON.stringify(rule);
     setRevision(changedWhileSaving ? null : { ...result, spec: rule });
+    setContextBasis({ ...result, spec: rule });
     setDirty(changedWhileSaving);
     setVersions(
       await api(`/v1/rules/${encodeURIComponent(rule.name)}/versions`),
@@ -1051,6 +1080,16 @@ function App() {
                             )}
                       </div>
                       <ActionHelp actions={rule.actions} index={actionIndex} />
+                      <div className="editor-context-note" aria-live="polite">
+                        <strong>{t("Contexto disponible")}</strong>
+                        <p>{contextLoading ? t("Buscando resultados anteriores…") : contextError
+                          ? t("No se pudo cargar el contexto. Los resultados reales no están disponibles.")
+                          : usableContext?.sample
+                            ? t("Ejemplo de ejecución {run}, versión {version}. No son valores de una ejecución actual.", { run: short(usableContext.run_id), version: usableContext.version })
+                            : t("Sin resultados observados para estos pasos. Las salidas declaradas no tienen valor hasta ejecutar.")}</p>
+                        {!contextKey && contextBasis && <p>{t("Cambiaste pasos anteriores: no se reutilizan sus resultados viejos.")}</p>}
+                        {contextKey && <button className="text-button" disabled={contextLoading} onClick={() => setContextRefresh(n => n + 1)}>{t("Actualizar contexto")}</button>}
+                      </div>
                       <ActionEditor
                         action={action}
                         definition={definition}

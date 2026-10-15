@@ -65,7 +65,7 @@ def test_nested_or_with_bounded_branches_and_bracket_aliases_is_accepted():
     validate_safety(Rule.model_validate(raw))
 
 
-@pytest.mark.parametrize('target', ['${issue.fields.customfield_1}', 'OTHER-${issue.fields.id}',
+@pytest.mark.parametrize('target', ['OTHER-${issue.fields.id}',
     '${_steps["0"].key}', '${_steps["99"].key}', {'path': 'issue.key', 'default': 'OPS-1'}])
 def test_unbounded_or_future_targets_are_rejected(target):
     raw = spec()
@@ -79,6 +79,25 @@ def test_explicit_cross_project_target_and_trusted_previous_step_are_allowed():
     raw['actions'][0]['issue'] = 'OPS-4'
     raw['actions'].append({'type': 'jira.comment.add', 'issue': '${_steps["0"].key}', 'text': 'Updated'})
     validate_safety(Rule.model_validate(raw))
+
+
+@pytest.mark.parametrize('path', ['issue.fields.parent.key', 'issue.fields.customfield_10090',
+    'issue.fields.issuelinks[0].inwardIssue.key'])
+def test_scalar_event_reference_targets_are_allowed(path):
+    raw = spec()
+    raw['actions'][0]['issue'] = {'path': path}
+    validate_safety(Rule.model_validate(raw))
+
+
+def test_nested_previous_result_target_is_allowed_but_future_and_fallback_are_not():
+    raw = spec()
+    raw['actions'].insert(0, {'type':'jira.issue.get','issue':{'path':'issue.key'}})
+    raw['actions'][1]['issue'] = {'path':'_steps["0"].fields.parent.key'}
+    validate_safety(Rule.model_validate(raw))
+    for path in ['_steps["1"].fields.parent.key', '_steps["01"].key', '_steps[0].key', '_steps']:
+        raw['actions'][1]['issue'] = {'path':path}
+        with pytest.raises(RuleError, match='unsafe_action_target'):
+            validate_safety(Rule.model_validate(raw))
 
 
 @pytest.mark.parametrize('origin', [None, '10003'])

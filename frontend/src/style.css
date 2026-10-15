@@ -1694,3 +1694,11 @@ td button {
 .action-help-content { line-height: 1.55; font-size: 14px; }
 .action-help-content ul { padding-left: 22px; }
 .action-help-content pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.editor-context-note { margin: 16px 0; padding: 12px 14px; border-radius: 10px; background: #f7f5fb; font-size: 13px; line-height: 1.5; }
+.editor-context-note p { margin: 6px 0; }
+.context-data-group h5 { margin: 14px 10px 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.single-value .input-action { align-items: start; }
+.single-value .input-action input, .single-value .input-action textarea { min-width: 0; }
+.single-value input[readonly], .single-value textarea[readonly] { background: #f4f0fb; font-family: monospace; }
+.single-value > small { display: block; margin: 8px 0; line-height: 1.5; }
+.single-value > details { margin-top: 10px; font-size: 13px; }

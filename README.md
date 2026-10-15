@@ -351,10 +351,26 @@ requeridos por la aplicación. Verificar IDs y permisos propios antes de activar
 - jira.issue.get: leer la tarjeta actual y, opcionalmente, detener la secuencia si no cumple require.
 
 Resultados de pasos previos: `_steps["0"].key`, `_steps["1"].fields.status.id`, etc. `_steps`
-es un objeto de resultados por clave numérica, no una lista; se conserva por compatibilidad.
+es un objeto de resultados por clave numérica, no una lista: el paso visible 1 usa la clave `"0"`.
 El contexto lo construye el worker
 desde Postgres; un evento entrante no puede sobrescribirlo. Las cadenas se reanudan desde el paso pendiente.
 Ejemplo: examples/jira-create-from-source.yaml (borrador, nunca activado automáticamente).
+
+En Studio, **Ticket a editar** permite escribir una clave Jira o elegir con `{ }` el dato
+que la contiene, incluido `issue.fields.parent.key` para editar el padre. **Agregar campo**
+abre directamente su editor de nuevo valor; no hay que elegir un modo de binding para
+esta operación. Los controles técnicos se conservan en Opciones avanzadas.
+Los selectores muestran datos del evento y resultados anidados de acciones anteriores,
+con ejemplos históricos protegidos cuando existen. Ver [contexto y edición en Studio](docs/studio.md#contexto-y-ejemplos-de-pasos-anteriores).
+
+`GET /v1/rules/{name}/versions/{version}/context?before_step=N` requiere `api:read`.
+Devuelve campos y ejemplos de una sola ejecución de esa versión, nunca pasos `>= N`,
+resultados fallidos, `_steps` inyectado en el webhook ni eventos redactados. La búsqueda
+revisa como máximo diez ejecuciones, con índices de la migración 005; inspecciona hasta
+100 campos y 2.000 nodos por resultado previo, previews escalares de 120 caracteres y
+el catálogo acotado del evento de esa misma ejecución. No ejecuta acciones ni llama proveedores.
+Sin resultados devuelve `sample:false`, no valores ficticios. El editor descarta muestras
+si cambian el trigger, el filtro o los pasos anteriores; indica siempre versión y ejecución.
 
 El conector requiere JIRA_API_TOKEN y JIRA_CLOUD_ID.
 Usa exclusivamente https://api.atlassian.com/ex/jira/{cloudId}/rest/api/3.
@@ -466,10 +482,13 @@ borrador sigue permitido, pero **activarlo exige superar estos controles**:
   `from`, `to`, `fromString` o `toString`. La mera presencia del changelog o del campo no alcanza.
 - Una transición necesita `from_status_id` y `to_status_id` distintos. Se comprueba el estado
   actual antes del envío, aunque Jira puede cambiar concurrentemente después de esa lectura.
-- Los destinos de acciones Jira deben ser claves literales (incluido cross-project), `issue.key`
-  o `.key` de un paso Jira anterior que produzca ese resultado. No se aceptan destinos calculados
-  libremente desde custom fields, templates parciales, pasos futuros ni fallbacks. Esto se aplica
-  también a `source`, `parent`, `inward` y `outward` dentro de una regla con escrituras.
+- Los destinos de acciones Jira deben ser una clave literal (incluido cross-project) o una
+  referencia a un único valor: `issue.key`, `issue.fields.parent.key`, un custom field que
+  contenga una clave, o un resultado anterior como `_steps["0"].fields.parent.key`.
+  La gramática no permite búsquedas, comodines ni iteraciones. Antes de cualquier HTTP o
+  reserva de escritura se valida que el resultado sea exactamente una clave Jira; listas,
+  objetos, null, IDs numéricos y JQL fallan. No se aceptan templates parciales, pasos futuros
+  ni fallbacks. Esto se aplica también a `source`, `parent`, `inward` y `outward` en reglas con escrituras.
 - Las reglas exclusivamente `jira.issue.get` no necesitan alcance de escritura. En el origen
   autenticado `test` se permite además acotar mediante un `test_id` explícito con `eq`/`in`;
   no es una excepción general a las verificaciones de destinos ni transiciones.

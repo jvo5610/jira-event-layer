@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
-import { filterSuggestions, SuggestionDetails, type Suggestion } from "./Forms";
+import { ActionEditor, enteredBinding, SingleValueEditor, filterSuggestions, SuggestionDetails, type Suggestion } from "./Forms";
 import { setLanguage } from "./i18n";
 
 afterEach(() => setLanguage("es"));
@@ -8,6 +8,30 @@ const render = (overrides: Partial<Suggestion> = {}) => renderToStaticMarkup(
   <SuggestionDetails suggestion={{path: "issue.fields.status.name", types: ["null", "string"], ...overrides}} />,
 );
 describe("Observed field examples", () => {
+  it("uses one issue input and a data picker instead of requiring a binding mode", () => {
+    const html = renderToStaticMarkup(<SingleValueEditor label="Ticket a editar" target value={{path:'issue.fields.parent.key'}} suggestions={[]} onChange={() => {}} />);
+    expect(html).toContain('aria-label="Ticket a editar"');
+    expect(html).toContain('issue.fields.parent.key');
+    expect(html.toLowerCase()).toContain('readonly');
+    expect(html).toContain('Elegir dato para Ticket a editar');
+    expect(html).toContain('Quitar dato seleccionado');
+    expect(html).not.toContain('class="segmented"');
+    expect(enteredBinding('OPS-42')).toEqual({value:'OPS-42'});
+    expect(enteredBinding('${issue.fields.parent.key}')).toEqual({template:'${issue.fields.parent.key}'});
+  });
+  it("adds Jira fields through a select and immediately shows their value editor", () => {
+    const html = renderToStaticMarkup(<ActionEditor action={{type:'jira.issue.edit',issue:{value:'KAN-45'},fields:{description:{value:'New text'}}}}
+      definition={{properties:{issue:{},fields:{}},required:['issue','fields']}} suggestions={[]} onChange={() => {}} />);
+    expect(html).toContain('Campos a modificar');
+    expect(html).toContain('aria-label="description"');
+    expect(html).toContain('Reemplaza el contenido actual');
+    expect(html).toContain('aria-label="Agregar campo"');
+    expect(html).not.toContain('class="segmented"');
+  });
+  it("shows actual prior values and distinguishes unobserved output contracts", () => {
+    expect(render({origin:'1 · Consultar ticket',example_state:'present',example_kind:'value',example:'KAN-45'})).toContain('Ejemplo: &quot;KAN-45&quot;');
+    expect(render({origin:'1 · Consultar ticket',availability:'declared'})).toContain('todavía no hay un valor observado');
+  });
   it("preserves raw paths, observed types and JSON example types", () => {
     for (const value of ["En curso", 0, false]) {
       const html = render({example_state: "present", example_kind: "value", example: value});

@@ -249,6 +249,48 @@ def create_app(settings=None, store=None, authenticator=None, *, webhooks=False)
             raise KeyError(name)
         return rows[0]
 
+    @app.get("/v1/rules/{name}/versions/{version}/context", dependencies=[Depends(authorize)])
+    def editor_context(name: str, version: int, request: Request, before_step: int = Query(ge=0, le=10)):
+        store = request.app.state.store
+        revisions = store.query('SELECT spec FROM rule_versions WHERE rule_name=%s AND version=%s', (name, version))
+        if not revisions:
+            raise KeyError(name)
+        actions = revisions[0]['spec']['actions']
+        if before_step > len(actions):
+            raise HTTPException(422, 'Step is outside this rule version')
+        # One coherent run, never a union of outputs from unrelated executions.
+        # Redacted events cannot be used to reconstruct historical context.
+        runs = store.query('''SELECT r.id,r.created_at,r.status,e.id AS event_id FROM runs r
+            JOIN events e ON e.id=r.event_id WHERE r.rule_name=%s AND r.version=%s
+            AND e.payload_redacted_at IS NULL ORDER BY r.created_at DESC,r.id DESC LIMIT 10''', (name, version))
+        for run in runs:
+            rows = store.query('''SELECT DISTINCT ON (step) step,detail->'result' AS result FROM run_log
+                WHERE run_id=%s AND step<%s AND status IN ('pending','succeeded')
+                AND detail->'result' IS NOT NULL ORDER BY step,id DESC''', (run['id'], before_step))
+            if before_step and not rows:
+                continue
+            fields = []
+            for row in rows:
+                step = row['step']
+                if not 0 <= step < min(before_step, len(actions)):
+                    continue
+                # Existing discovery applies the same sensitive-key/value protections,
+                # 120-character previews, depth, field and visit budgets as event data.
+                for field in discover([{'_steps': {str(step): row['result']}}], max_fields=100):
+                    if field['path'] != '_steps':
+                        fields.append({**field, 'step': step, 'action_type': actions[step]['type']})
+            events = store.query('SELECT payload FROM events WHERE id=%s AND payload_redacted_at IS NULL', (run['event_id'],))
+            if not events:
+                continue
+            payload = {k:v for k,v in events[0]['payload'].items() if k != '_steps'}
+            return {'run_id': run['id'], 'created_at': run['created_at'], 'status': run['status'],
+                    'version': version, 'before_step': before_step, 'fields': fields[:900],
+                    'event_fields': discover([payload]), 'sample': True,
+                    'notice': 'Historical example from one run of this exact version; not live values or an execution preview. No provider calls.'}
+        return {'run_id': None, 'version': version, 'before_step': before_step,
+                'fields': [], 'event_fields': [], 'sample': False,
+                'notice': 'No retained prior outputs in the latest 10 runs of this version. No actions were executed.'}
+
     @app.post("/v1/rules/{name}/activate", dependencies=[Depends(authorize)])
     def activate(name: str, body: Activation, request: Request):
         rows = request.app.state.store.query("SELECT spec FROM rule_versions WHERE rule_name=%s AND version=%s", (name, body.version))

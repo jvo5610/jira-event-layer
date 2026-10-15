@@ -3,6 +3,64 @@ from app.paths import check_path
 from test_integration import env
 
 
+def context_fixture(client, store, suffix=''):
+    import yaml
+    from test_integration import activate, ingest
+    spec={'apiVersion':'automation/v1','kind':'Rule','name':'context-example',
+          'trigger':{'source':'jira','event':'jira:issue_updated'},
+          'when':{'path':'issue.key','op':'exists'},'description':suffix,
+          'actions':[{'type':'jira.issue.get','issue':{'path':'issue.key'}},
+                     {'type':'jira.issue.get','issue':{'path':'issue.key'}}]}
+    saved=activate(client,yaml.safe_dump(spec))
+    event=ingest(client,key='ctx-'+suffix,payload={'issue':{'key':'KAN-1'},'_steps':{'0':{'forged':'not trusted'}}})
+    run=event['runs'][0]['id']
+    return saved,event,run
+
+
+def test_editor_context_returns_only_durable_previous_results_with_safe_nested_examples(env):
+    from psycopg.types.json import Jsonb
+    client,store,_=env
+    saved,event,run=context_fixture(client,store)
+    for step,status,result in [(0,'pending',{'key':'KAN-1','fields':{'parent':{'key':'OPS-2'},'emailAddress':'private@example.com','token':'hidden-value','flag':False}}),
+                               (1,'succeeded',{'key':'FUTURE-9'}),
+                               (0,'failed',{'key':'FAILED-8'})]:
+        store.query('INSERT INTO run_log(run_id,step,status,detail) VALUES(%s,%s,%s,%s) RETURNING id',
+                    (run,step,status,Jsonb({'result':result})))
+    path=f'/v1/rules/context-example/versions/{saved["version"]}/context'
+    response=client.get(path,params={'before_step':1});assert response.status_code==200
+    data=response.json(); fields={f['path']:f for f in data['fields']}
+    assert data['run_id']==run and data['sample'] is True
+    assert fields['_steps["0"].fields.parent.key']['example']=='OPS-2'
+    assert fields['_steps["0"].fields.flag']['example'] is False
+    assert fields['_steps["0"].key']['example']=='KAN-1'
+    assert all(f['step']==0 for f in data['fields'])
+    assert not any(f['path'].startswith('_steps') for f in data['event_fields'])
+    for hidden in ['private@example.com','hidden-value','FUTURE-9','FAILED-8','not trusted']:
+        assert hidden not in str(data)
+    assert client.get(path,params={'before_step':3}).status_code==422
+    assert client.get(path,params={'before_step':1},headers={'Authorization':''}).status_code==401
+
+
+def test_editor_context_does_not_cross_runs_versions_or_redacted_events(env):
+    from psycopg.types.json import Jsonb
+    from test_integration import ingest
+    client,store,_=env
+    saved,event,run=context_fixture(client,store)
+    store.query('INSERT INTO run_log(run_id,step,status,detail) VALUES(%s,0,\'pending\',%s) RETURNING id',
+                (run,Jsonb({'result':{'key':'KAN-1'}})))
+    # A newer run without durable outputs must not overwrite an earlier run's context.
+    ingest(client,key='ctx-newer',payload={'issue':{'key':'KAN-99'}})
+    path=f'/v1/rules/context-example/versions/{saved["version"]}/context?before_step=1'
+    data=client.get(path).json()
+    assert data['run_id']==run
+    assert next(f for f in data['event_fields'] if f['path']=='issue.key')['example']=='KAN-1'
+    newer,_,_=context_fixture(client,store,'v2')
+    assert client.get(f'/v1/rules/context-example/versions/{newer["version"]}/context?before_step=1').json()['sample'] is False
+    store.query('UPDATE events SET payload_redacted_at=now() WHERE id=%s RETURNING id',(event['event_id'],))
+    assert client.get(path).json()['sample'] is False
+    assert client.get('/v1/rules/context-example/versions/999/context?before_step=1').status_code==404
+
+
 def test_discovery_handles_all_types_and_executable_paths():
     fields = discover([{"issue": {"fields": {"status": {"name": "Done"}, "a.b": [False, None, 3]}}}])
     by_path = {f["path"]: f for f in fields}

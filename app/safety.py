@@ -72,12 +72,17 @@ def target_is_bounded(binding, index, actions):
             return False
         path = binding.path
     keys = path_keys(path)
-    if keys == ('issue', 'key'):
+    if not keys:
+        return False
+    # Field references never iterate: the path grammar has no wildcards, slices,
+    # queries or expressions. A parent/custom field is bounded just like issue.key.
+    # Jira.issue_key checks the resolved STRING before any HTTP call or write budget
+    # reservation; objects, lists, numeric IDs and JQL are not executable targets.
+    if keys[0] != '_steps':
         return True
-    return (len(keys) == 3 and keys[0] == '_steps' and isinstance(keys[1], str)
+    return (len(keys) >= 3 and isinstance(keys[1], str)
             and keys[1].isdigit() and str(int(keys[1])) == keys[1] and int(keys[1]) < index
-            and keys[2] == 'key' and actions[int(keys[1])].type.startswith('jira.')
-            and actions[int(keys[1])].type != 'jira.issue.link')
+            and int(keys[1]) < len(actions))
 
 
 def validate_safety(rule):
@@ -98,4 +103,4 @@ def validate_safety(rule):
         for name in ('issue', 'source', 'parent', 'inward', 'outward'):
             binding = getattr(action, name, None)
             if binding is not None and not target_is_bounded(binding, index, rule.actions):
-                raise RuleError(f'unsafe_action_target: action {index} {name} must be an explicit issue key, issue.key or a previous Jira step key')
+                raise RuleError(f'unsafe_action_target: action {index} {name} must be an explicit issue key or a single field reference; future steps, partial templates and fallbacks are not allowed')
