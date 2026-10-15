@@ -104,12 +104,16 @@ class Worker:
     def heartbeat(self):
         self.store.query("INSERT INTO worker_heartbeats(worker_id,last_seen) VALUES(%s,now()) ON CONFLICT(worker_id) DO UPDATE SET last_seen=now() RETURNING worker_id", (worker_id(),))
 
+    def execution_context(self, run, payload):
+        # Only durable results of this run and earlier steps are trusted.
+        # A webhook-supplied _steps object must never impersonate a result.
+        results = self.store.query("SELECT step,detail FROM run_log WHERE run_id=%s AND step<%s AND status IN ('pending','succeeded') ORDER BY id", (run["id"], run["step"]))
+        return {**payload, "_steps": {str(r["step"]): r["detail"]["result"] for r in results if r["detail"].get("result") is not None}}
+
     def tick_jira(self, run, rule, action, payload):
         try:
             self.settings.check_targets(rule)
-            results = self.store.query("SELECT step,detail FROM run_log WHERE run_id=%s AND step<%s AND status IN ('pending','succeeded') ORDER BY id", (run["id"], run["step"]))
-            context = dict(payload)
-            context["_steps"] = {str(r["step"]): r["detail"]["result"] for r in results if r["detail"].get("result") is not None}
+            context = self.execution_context(run, payload)
             revision = self.store.query("SELECT sha256 FROM rule_versions WHERE rule_name=%s AND version=%s",
                                         (run["rule_name"], run["version"]))[0]
             identity = ExecutionIdentity(rule_name=run["rule_name"], rule_version=run["version"],
@@ -143,7 +147,7 @@ class Worker:
             return True
         try:
             self.settings.check_targets(rule)
-            payload = None if polling else render_action(action, rows[0]["payload"])
+            payload = None if polling else render_action(action, self.execution_context(run, rows[0]["payload"]))
             if not polling:
                 self.reserve_bitbucket_write(run)
             response = self.connector.call("GET" if polling else "POST", action, body=payload,

@@ -13,7 +13,13 @@ import shutil
 ROOT_FILES = (".gitignore", ".dockerignore", ".env.example", "Dockerfile", "compose.yaml", "compose.dev.yaml",
               "pyproject.toml", "uv.lock", "README.md", "CONTRIBUTING.md", "SECURITY.md", "use-cases.json",
               ".github/workflows/ci.yml")
-PUBLIC_TOOLS = ("local_config.py", "init_installation.py", "selftest.py", "smoke_container.py", "e2e_live.py", "export_source.py")
+STUDIO_FILES = ("compose.studio.yaml", ".env.studio.example", "docs/local-studio.md",
+                "frontend/package.json", "frontend/package-lock.json", "frontend/tsconfig.json",
+                "frontend/index.html", "frontend/Dockerfile", "frontend/.dockerignore", "frontend/nginx.conf.template",
+                "frontend/src/main.tsx", "frontend/src/Canvas.tsx", "frontend/src/Forms.tsx",
+                "frontend/src/model.ts", "frontend/src/model.test.ts", "frontend/src/style.css")
+STUDIO_FILES += ("frontend/src/i18n.ts", "frontend/src/i18n.test.ts")
+PUBLIC_TOOLS = ("local_config.py", "init_installation.py", "selftest.py", "smoke_container.py", "e2e_live.py", "export_source.py", "studio_server.py")
 SUFFIXES = {".py", ".sql", ".yaml", ".json"}
 
 
@@ -21,7 +27,7 @@ def export(root, destination):
     root, destination = Path(root).resolve(), Path(destination).resolve()
     if destination.exists():
         raise ValueError("Destination already exists; refusing to overwrite")
-    paths = [Path(name) for name in ROOT_FILES]
+    paths = [Path(name) for name in ROOT_FILES + STUDIO_FILES]
     for folder in ("app", "tests", "examples", "deploy"):
         paths += [p.relative_to(root) for p in (root / folder).rglob("*")
                   if p.is_file() and p.suffix in SUFFIXES and "__pycache__" not in p.parts]

@@ -13,6 +13,10 @@ See [capabilities and production gates](use-cases.json). Not affiliated with Atl
 
 ## Quick start
 
+For the local visual scenario editor (Docker, loopback only), see
+[Automation Studio](docs/local-studio.md). It covers the v1 actions and filters,
+maps observed event fields, and uses the same versioned API and worker.
+
 Prerequisites: Git, Python 3.12+, [uv](https://docs.astral.sh/uv/getting-started/installation/),
 Docker Engine with Compose v2. macOS or Linux; Windows users can use WSL2 with Docker integration.
 

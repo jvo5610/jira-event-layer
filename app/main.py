@@ -13,6 +13,7 @@ from psycopg_pool import PoolTimeout
 from starlette.concurrency import run_in_threadpool
 
 from app.config import Settings
+from app.catalog import discover
 from app.dsl import Rule, RuleError, match, parse_rule
 from app.store import Conflict, Store, principal
 
@@ -160,14 +161,32 @@ def create_app(settings=None, store=None):
     def schema():
         return Rule.model_json_schema()
 
+    @app.get("/v1/catalog", dependencies=[Depends(admin)])
+    def catalog(request: Request):
+        cfg = request.app.state.settings
+        return {
+            "schema": Rule.model_json_schema(),
+            "events": request.app.state.store.query("SELECT DISTINCT source,event_type FROM (SELECT source,event_type FROM events ORDER BY received_at DESC LIMIT 200) recent ORDER BY source,event_type"),
+            "connectors": {
+                "jira": {"configured": True if cfg.jira_token and cfg.jira_email and cfg.jira_cloud_id else None if cfg.allowed_jira_projects else False, "projects": cfg.allowed_jira_projects, "fields": cfg.allowed_jira_fields, "required_label": cfg.jira_required_label},
+                "bitbucket": {"configured": True if cfg.bitbucket_token and cfg.bitbucket_email else None if cfg.allowed_repositories else False, "repositories": cfg.allowed_repositories},
+            },
+            "limits": {"actions": 10, "filter_depth": 12, "filter_nodes": 128, "filter_children": 32},
+        }
+
+    @app.get("/v1/catalog/fields", dependencies=[Depends(admin)])
+    def catalog_fields(request: Request, source: str = Query(max_length=100), event_type: str = Query(max_length=100)):
+        rows = request.app.state.store.query("WITH recent AS MATERIALIZED (SELECT id,payload,received_at FROM events WHERE source=%s AND event_type=%s AND payload_redacted_at IS NULL ORDER BY received_at DESC,id DESC LIMIT 100), ranked AS (SELECT *,row_number() OVER (PARTITION BY coalesce(payload#>>'{issue,fields,issuetype,id}','') ORDER BY received_at DESC,id DESC) AS rank FROM recent) SELECT payload FROM ranked ORDER BY rank,received_at DESC,id DESC LIMIT 20", (source, event_type))
+        return {"sample_count": len(rows), "sample_limit": 20, "candidate_limit":100, "sampling":"recent issue-type diversity", "fields": discover(row["payload"] for row in rows), "notice": "Observed fields, not a complete provider schema. Values are sampled only for non-personal metadata."}
+
     @app.post("/v1/rules/validate", dependencies=[Depends(admin)], openapi_extra=YAML_BODY)
-    async def validate_yaml(request: Request):
+    async def validate_yaml(request: Request, targets: bool = True):
         try:
             text = (await request.body()).decode("utf-8")
         except UnicodeDecodeError:
             raise RuleError("YAML must be UTF-8") from None
-        rule, digest = checked(text, request)
-        return {"valid": True, "sha256": digest, "spec": rule.model_dump()}
+        rule, digest = checked(text, request) if targets else parse_rule(text)
+        return {"valid": True, "sha256": digest, "spec": rule.model_dump(), "targets_checked": targets}
 
     @app.post("/v1/rules", status_code=201, dependencies=[Depends(admin)], openapi_extra=YAML_BODY)
     async def save_yaml(request: Request):
@@ -276,8 +295,8 @@ def create_app(settings=None, store=None):
                                        body["source"], delivery, body["event_type"], body["payload"], raw)
 
     @app.get("/v1/events", dependencies=[Depends(admin)])
-    def events(request: Request, limit: int = Query(50, ge=1, le=100)):
-        return request.app.state.store.query("SELECT id,source,event_type,delivery_id,received_at,processed_at,attempts,last_error FROM events ORDER BY received_at DESC LIMIT %s", (limit,))
+    def events(request: Request, limit: int = Query(50, ge=1, le=100), source: str | None = Query(None, max_length=100), event_type: str | None = Query(None, max_length=100), before: UUID | None = None):
+        return request.app.state.store.query("SELECT id,source,event_type,delivery_id,received_at,processed_at,attempts,last_error,payload#>>'{issue,key}' AS issue_key,payload#>>'{issue,fields,issuetype,name}' AS issue_type,left(payload#>>'{issue,fields,summary}',200) AS issue_summary FROM events WHERE (%s::text IS NULL OR source=%s) AND (%s::text IS NULL OR event_type=%s) AND (%s::uuid IS NULL OR (received_at,id)<(SELECT received_at,id FROM events WHERE id=%s)) ORDER BY received_at DESC,id DESC LIMIT %s", (source, source, event_type, event_type, before, before, limit))
 
     @app.get("/v1/events/{event_id}", dependencies=[Depends(admin)])
     def event(event_id: UUID, request: Request):
@@ -291,8 +310,8 @@ def create_app(settings=None, store=None):
         return request.app.state.store.execute(event_id)
 
     @app.get("/v1/runs", dependencies=[Depends(admin)])
-    def runs(request: Request, limit: int = Query(50, ge=1, le=100)):
-        return request.app.state.store.query("SELECT * FROM runs ORDER BY created_at DESC LIMIT %s", (limit,))
+    def runs(request: Request, limit: int = Query(50, ge=1, le=100), before: UUID | None = None):
+        return request.app.state.store.query("SELECT id,event_id,rule_name,version,status,step,attempts,next_at,external_uuid,last_error,created_at,updated_at FROM runs WHERE (%s::uuid IS NULL OR (created_at,id)<(SELECT created_at,id FROM runs WHERE id=%s)) ORDER BY created_at DESC,id DESC LIMIT %s", (before, before, limit))
 
     @app.get("/v1/runs/{run_id}", dependencies=[Depends(admin)])
     def run(run_id: UUID, request: Request):

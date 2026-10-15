@@ -1,0 +1,54 @@
+# Independent local installation. No existing .env or Fett credentials are read.
+name: jira-automation-studio
+x-environment: &environment
+  DATABASE_URL: postgresql://studio:local-studio-only@postgres:5432/studio
+  TENANT_ID: local-studio
+  API_SURFACE: management
+  ADMIN_TOKEN: ${STUDIO_ADMIN_TOKEN:-local-studio-admin-not-for-production-2026}
+  ALLOWED_JIRA_PROJECTS: ${STUDIO_JIRA_PROJECTS:-}
+  ALLOWED_REPOSITORIES: ${STUDIO_REPOSITORIES:-}
+  JIRA_ACCOUNT_EMAIL: ${STUDIO_JIRA_ACCOUNT_EMAIL:-}
+  JIRA_API_TOKEN: ${STUDIO_JIRA_API_TOKEN:-}
+  JIRA_CLOUD_ID: ${STUDIO_JIRA_CLOUD_ID:-}
+  BITBUCKET_ACCOUNT_EMAIL: ${STUDIO_BITBUCKET_ACCOUNT_EMAIL:-}
+  BITBUCKET_API_TOKEN: ${STUDIO_BITBUCKET_API_TOKEN:-}
+  ALLOWED_JIRA_FIELDS: ${STUDIO_JIRA_FIELDS:-summary,description,labels,priority,assignee,duedate}
+  JIRA_REQUIRED_LABEL: ${STUDIO_JIRA_REQUIRED_LABEL:-automation-managed}
+services:
+  postgres:
+    image: postgres:17
+    environment: {POSTGRES_DB: studio, POSTGRES_USER: studio, POSTGRES_PASSWORD: local-studio-only}
+    volumes: [studio-data:/var/lib/postgresql/data]
+    healthcheck: {test: [CMD-SHELL, pg_isready -U studio], interval: 2s, timeout: 3s, retries: 30}
+    mem_limit: 256m
+  migrate:
+    build: .
+    environment: *environment
+    command: [python, -m, app.migrate]
+    healthcheck: {disable: true}
+    depends_on: {postgres: {condition: service_healthy}}
+  api:
+    build: .
+    environment: *environment
+    depends_on: {migrate: {condition: service_completed_successfully}}
+    mem_limit: 384m
+    cpus: 1
+  worker:
+    build: .
+    environment: *environment
+    command: [python, -m, app.worker]
+    depends_on: {migrate: {condition: service_completed_successfully}}
+    healthcheck: {test: [CMD, python, -m, app.health, worker], interval: 15s, timeout: 3s, start_period: 30s, retries: 3}
+    mem_limit: 256m
+    cpus: 0.5
+  studio:
+    build: ./frontend
+    environment:
+      STUDIO_PORT: ${STUDIO_PORT:-8091}
+      STUDIO_ADMIN_TOKEN: ${STUDIO_ADMIN_TOKEN:-local-studio-admin-not-for-production-2026}
+    ports: ["127.0.0.1:${STUDIO_PORT:-8091}:80"]
+    depends_on: {api: {condition: service_healthy}}
+    mem_limit: 64m
+    cpus: 0.5
+volumes:
+  studio-data:

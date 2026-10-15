@@ -59,6 +59,10 @@ def test_source_export_excludes_private_state(tmp_path):
     destination = tmp_path / "source"
     files = export(Path(__file__).resolve().parents[1], destination)
     assert "Dockerfile" in files and "tools/selftest.py" in files
+    assert "frontend/src/main.tsx" in files and "compose.studio.yaml" in files
+    assert "docs/local-studio.md" in files
+    assert not (destination / ".env.studio").exists()
+    assert not (destination / "frontend/node_modules").exists()
     assert "app/migrations/001_initial.sql" in files
     assert "app/paths.py" in files and "tests/test_paths.py" in files
     assert "examples/literal-field-repository.yaml" in files

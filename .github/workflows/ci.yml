@@ -10,6 +10,18 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  studio:
+    name: Local visual editor contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Frontend contract, types, build and dependency audit
+        run: >-
+          docker run --rm -v "$PWD:/src" -w /src/frontend node:22-alpine
+          sh -c 'npm ci --no-audit --no-fund && npm test && npm run build && npm audit --omit=dev'
   tests:
     name: Tests (Python ${{ matrix.python }})
     runs-on: ubuntu-24.04
