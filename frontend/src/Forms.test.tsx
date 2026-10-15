@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
-import { ActionEditor, enteredBinding, SingleValueEditor, filterSuggestions, SuggestionDetails, type Suggestion } from "./Forms";
+import { ActionEditor, enteredBinding, isIssueTargetSuggestion, SingleValueEditor, filterSuggestions, SuggestionDetails, type Suggestion } from "./Forms";
 import { setLanguage } from "./i18n";
 
 afterEach(() => setLanguage("es"));
@@ -8,6 +8,14 @@ const render = (overrides: Partial<Suggestion> = {}) => renderToStaticMarkup(
   <SuggestionDetails suggestion={{path: "issue.fields.status.name", types: ["null", "string"], ...overrides}} />,
 );
 describe("Observed field examples", () => {
+  it("suggests issue-key values, not observed dates, status names or structured outputs as edit targets", () => {
+    expect(isIssueTargetSuggestion({path:'issue.fields.parent.key',types:['null']})).toBe(true);
+    expect(isIssueTargetSuggestion({path:'issue.fields.customfield_10090',types:['string'],example_state:'present',example_kind:'value',example:'OPS-42'})).toBe(true);
+    for (const example of ['Done','2026-10-15',false,123])
+      expect(isIssueTargetSuggestion({path:'issue.fields.x',types:['string'],example_state:'present',example_kind:'value',example})).toBe(false);
+    expect(isIssueTargetSuggestion({path:'_steps["0"].fields',types:[],availability:'declared'})).toBe(false);
+    expect(isIssueTargetSuggestion({path:'_steps["0"].key',types:[],availability:'declared'})).toBe(true);
+  });
   it("uses one issue input and a data picker instead of requiring a binding mode", () => {
     const html = renderToStaticMarkup(<SingleValueEditor label="Ticket a editar" target value={{path:'issue.fields.parent.key'}} suggestions={[]} onChange={() => {}} />);
     expect(html).toContain('aria-label="Ticket a editar"');

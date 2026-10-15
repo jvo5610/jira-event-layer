@@ -223,7 +223,7 @@ export async function api(
       unsafe_write_scope: "Acotá el proyecto o ticket con eq/in en todas las ramas del filtro antes de activar.",
       unsafe_change_scope: "En issue_updated, filtrá el campo cambiado y su valor anterior o nuevo dentro del mismo some.where.",
       unsafe_transition: "Cada cambio de estado necesita IDs de origen y destino distintos.",
-      unsafe_action_target: "Usá una clave de ticket explícita, issue.key o la clave de un paso Jira anterior como destino.",
+      unsafe_action_target: "Usá una clave Jira o una sola referencia que contenga esa clave. No se permiten pasos futuros, templates parciales ni fallbacks.",
     };
     throw new Error(safetyMessages[code] ? `${t(safetyMessages[code])} [${code}]` : detail);
   }

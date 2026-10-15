@@ -147,6 +147,8 @@ Los tests verifican autenticación, secretos por archivo, rechazo de configuraci
 Por ejemplo, `issue.fields.parent.key` apunta al padre del ticket que disparó el
 evento y `_steps["0"].fields.parent.key` al padre obtenido por una consulta anterior.
 La selección utiliza el valor de la ruta al ejecutar, no el texto de la ruta.
+En este selector se priorizan valores con formato de clave Jira y salidas de claves
+de pasos anteriores; no se ofrecen resultados estructurados como si fueran tickets.
 Para volver a escribir una clave fija, quitá el dato seleccionado con `×`.
 
 En **Campos a modificar**, elegí `description`, `summary`, etc. desde **Agregar

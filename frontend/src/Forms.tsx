@@ -77,6 +77,13 @@ export function enteredBinding(text: string): Obj {
   return text.includes("${") ? { template: text } : { value: text };
 }
 
+export function isIssueTargetSuggestion(s: Suggestion): boolean {
+  if (s.availability === "declared") return /\.(key|inward|outward)$/.test(s.path);
+  if (s.example_state === "present" && s.example_kind === "value")
+    return typeof s.example === "string" && /^[A-Z][A-Z0-9_]{1,30}-[1-9][0-9]*$/.test(s.example);
+  return /\.key$/.test(s.path) || s.types.includes("string");
+}
+
 export function SingleValueEditor({ value, onChange, suggestions, label, target = false, typed = false, onRemove }: {
   value: any; onChange: (v: any) => void; suggestions: Suggestion[]; label: string;
   target?: boolean; typed?: boolean; onRemove?: () => void;
@@ -91,7 +98,7 @@ export function SingleValueEditor({ value, onChange, suggestions, label, target 
   if (target) for (const path of ["issue.key", "issue.fields.parent.key"]) {
     if (!targetSuggestions.some(s => s.path === path)) targetSuggestions.push({ path, types: ["string"] });
   }
-  const options = target ? targetSuggestions.filter(s => !s.types.length || s.types.includes("string")) : suggestions;
+  const options = target ? targetSuggestions.filter(isIssueTargetSuggestion) : suggestions;
   return <div className="single-value binding">
     <div className="field-heading"><span>{t(label)}</span>
       {onRemove && <button className="icon-button" aria-label={t("Quitar campo")} onClick={onRemove}><Trash2 size={14} /></button>}
