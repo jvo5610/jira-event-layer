@@ -37,7 +37,7 @@ export function SuggestionDetails({ suggestion: s }: { suggestion: Suggestion })
     <>
       <span className="data-option-path">{s.path}</span>
       <small className="data-option-types">
-        {s.origin ?? s.types.join(" · ")}
+        {[s.origin, s.types.join(" · ")].filter(Boolean).join(" · ")}
       </small>
       <small className="data-option-example">{preview}</small>
     </>

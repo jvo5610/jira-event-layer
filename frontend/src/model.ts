@@ -156,7 +156,7 @@ export function previousOutputs(
     (actionOutputKeys[a.type] ?? []).map((key) => ({
       path: `_steps["${i}"].${key}`,
       types: [],
-      origin: `${i + 1} · ${actionLabels[a.type]}`,
+      origin: `${i + 1} · ${t(actionLabels[a.type])}`,
       availability: "declared",
     })),
   );
