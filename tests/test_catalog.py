@@ -70,6 +70,16 @@ def test_discovery_handles_all_types_and_executable_paths():
         check_path(path)
 
 
+def test_context_discovery_keeps_shallow_values_when_an_earlier_branch_is_large():
+    result={'key':'KAN-1','fields':{'comment':{'comments':[{'body':{f'long{i}':'text' for i in range(300)}}]},
+                                'summary':'Actual summary','parent':{'key':'OPS-2'},'token':'must-stay-hidden'}}
+    fields={f['path']:f for f in discover([{'_steps':{'0':result}}],max_fields=100,breadth_first=True)}
+    assert fields['_steps["0"].fields.summary']['example']=='Actual summary'
+    assert fields['_steps["0"].fields.parent.key']['example']=='OPS-2'
+    assert fields['_steps["0"].fields.token']['example_state']=='protected'
+    assert 'must-stay-hidden' not in str(fields) and len(fields)<=100
+
+
 def test_discovery_keeps_comparison_values_restricted_and_protects_personal_previews():
     fields = discover([{"issue": {"fields": {"summary": "Review the request", "assignee": {"emailAddress": "private@example.com"}}}}])
     assert all(not f["values"] for f in fields)

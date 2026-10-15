@@ -276,7 +276,7 @@ def create_app(settings=None, store=None, authenticator=None, *, webhooks=False)
                     continue
                 # Existing discovery applies the same sensitive-key/value protections,
                 # 120-character previews, depth, field and visit budgets as event data.
-                for field in discover([{'_steps': {str(step): row['result']}}], max_fields=100):
+                for field in discover([{'_steps': {str(step): row['result']}}], max_fields=100, breadth_first=True):
                     if field['path'] != '_steps':
                         fields.append({**field, 'step': step, 'action_type': actions[step]['type']})
             events = store.query('SELECT payload FROM events WHERE id=%s AND payload_redacted_at IS NULL', (run['event_id'],))

@@ -1,6 +1,7 @@
 """Bounded, on-demand discovery. Never scan history or persist payload samples."""
 import json
 import re
+from collections import deque
 from app.paths import MAX_PATH
 
 
@@ -45,9 +46,18 @@ def example(entry, value, blocked):
     entry['example_state'] = 'present'
 
 
-def discover(payloads, *, max_fields=500, budget=VISITS_PER_EVENT):
+def discover(payloads, *, max_fields=500, budget=VISITS_PER_EVENT, breadth_first=False):
     fields = {}
     remaining = [budget]
+    pending = deque()
+
+    def descend(value, path, depth, blocked):
+        if breadth_first:
+            # Bound the queue itself, not just the eventual traversal.
+            if len(pending) < remaining[0]:
+                pending.append((value, path, depth, blocked))
+        else:
+            visit(value, path, depth, blocked)
 
     def visit(value, path, depth, blocked=False):
         if remaining[0] <= 0 or depth > 16 or len(path) > MAX_PATH:
@@ -75,15 +85,18 @@ def discover(payloads, *, max_fields=500, budget=VISITS_PER_EVENT):
                     continue
                 part = ("." if path else "") + key if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) else "[" + json.dumps(key) + "]"
                 sensitive = bool(SENSITIVE_KEY.search(re.sub(r'[^a-z0-9]', '', key.lower())))
-                visit(child, path + part, depth + 1, blocked or sensitive)
+                descend(child, path + part, depth + 1, blocked or sensitive)
         elif isinstance(value, list):
             # A concrete, executable path, not a made-up wildcard DSL.
             for index, child in enumerate(value[:3]):
-                visit(child, f"{path}[{index}]", depth + 1, blocked)
+                descend(child, f"{path}[{index}]", depth + 1, blocked)
 
     for index, payload in enumerate(payloads):
         if index >= SAMPLE_LIMIT:
             break
         remaining[0] = budget
+        pending.clear()
         visit(payload, "", 0)
+        while pending and remaining[0] > 0:
+            visit(*pending.popleft())
     return [{**entry, "types": sorted(entry["types"])} for _, entry in sorted(fields.items())]
