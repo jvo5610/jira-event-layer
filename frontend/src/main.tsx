@@ -539,11 +539,11 @@ function App() {
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <button onClick={() => navigate("settings")}>
+          <button aria-label={t("Instalación")} onClick={() => navigate("settings")}>
             <Settings2 size={18} /> {t("Instalación") + " "}
           </button>
           <div className="local-indicator">
-            <span /> {t("Docker local")}
+            <span /> {t("Conectado a")} {connection.environment}
             <small>{t("Solo en esta máquina")}</small>
           </div>
           <div className="profile">
@@ -1161,7 +1161,7 @@ function App() {
                 ) : null}
                 <button
                   className="icon-button"
-                  title="Actualizar"
+                  title={t("Actualizar")}
                   disabled={busy}
                   onClick={() => void task(() => refresh(page))}
                 >

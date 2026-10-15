@@ -1479,7 +1479,8 @@ td button {
   .brand > span:not(.brand-symbol),
   .workspace-label,
   .workspace,
-  .sidebar-bottom,
+  .sidebar-bottom .local-indicator,
+  .sidebar-bottom .profile,
   .nav-dot {
     display: none;
   }
@@ -1490,6 +1491,12 @@ td button {
     font-size: 0;
     padding: 15px;
     gap: 0;
+  }
+  .sidebar-bottom > button {
+    font-size: 0;
+    padding: 15px;
+    gap: 0;
+    margin-bottom: 0;
   }
   main {
     margin-left: 64px;

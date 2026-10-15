@@ -505,7 +505,7 @@ export function FilterEditor({
             suggestions={suggestions}
           />
           <select
-            aria-label="Operador"
+            aria-label={t("Operador")}
             value={value.op}
             onChange={(e) => {
               const op = e.target.value;
@@ -531,7 +531,7 @@ export function FilterEditor({
           </select>
           {value.op === "exists" ? (
             <select
-              aria-label="Existencia"
+              aria-label={t("Existencia")}
               value={String(value.value ?? true)}
               onChange={(e) =>
                 onChange({ ...value, value: e.target.value === "true" })
