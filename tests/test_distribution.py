@@ -76,6 +76,9 @@ def test_source_export_excludes_private_state(tmp_path):
     assert "Dockerfile" in files and "tools/selftest.py" in files
     assert "frontend/src/main.tsx" in files and "compose.studio.yaml" in files
     assert "docs/studio.md" in files
+    assert "docs/technical-reference.md" in files
+    for service in ("api", "worker", "migrate", "studio"):
+        assert f"deploy/env/{service}.env.example" in files
     assert not (destination / ".env.studio").exists()
     assert not (destination / "frontend/node_modules").exists()
     assert "app/migrations/001_initial.sql" in files

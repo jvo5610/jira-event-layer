@@ -15,10 +15,11 @@ Provide the commit, affected configuration, impact and a minimal redacted reprod
 
 ## Operating safely
 
-- Keep management APIs private; expose only the signed webhook receiver through TLS.
-- Use dedicated provider identities, project/repository allowlists and write budgets.
+- The single API serves management and signed webhooks on the same port. Use a TLS proxy/WAF
+  to restrict management paths; application Bearer authorization and webhook HMAC remain independent.
+- Use dedicated provider identities, Jira project permissions, scoped rules, repository allowlists and write budgets.
 - Inject credentials at runtime, preferably through mounted secrets; never put them in YAML rules.
-- A Jira label is an application guard, not a permission boundary. Jira permissions must enforce scope.
+- Flow labels identify provenance, not authorization. No label is required to operate a ticket.
 - Review ambiguous writes manually; never blindly replay them.
 - Back up PostgreSQL and verify restores. Protect logs, event payloads and backups as private data.
 - CI uses mocked providers; live provider tests require explicit operator configuration and authorization.

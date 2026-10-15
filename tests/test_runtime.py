@@ -86,7 +86,8 @@ def test_compose_keeps_migrator_credentials_out_of_runtime():
     migrator = compose["services"]["migrate"]
     assert migrator["environment"]["DB_USER"] == "${DB_MIGRATION_USER:?Set DB_MIGRATION_USER}"
     assert migrator["secrets"] == ["db_migrator_password"]
-    for service in ("api", "worker", "webhooks"):
+    assert "webhooks" not in compose["services"]
+    for service in ("api", "worker"):
         config = compose["services"][service]
         assert config["environment"]["DB_PASSWORD_FILE"] == "/run/secrets/db_runtime_password"
         assert "db_migrator_password" not in config["secrets"]
@@ -269,33 +270,28 @@ def test_secret_file_bounds(configuration, tmp_path, value):
 def test_invalid_configuration_fails_closed(configuration, name, value):
     configuration.setenv(name, value)
     with pytest.raises(RuntimeError):
-        Settings.from_env("webhooks")
+        Settings.from_env("api")
 
 
 def test_worker_does_not_need_inbound_secrets(configuration):
     configuration.delenv("ADMIN_BOOTSTRAP_TOKEN")
     configuration.delenv("JIRA_WEBHOOK_SECRET")
     assert Settings.from_env("worker").admin_bootstrap_token is None
-    assert Settings.from_env("api").webhook_secret == ""
     with pytest.raises(RuntimeError, match="JIRA_WEBHOOK_SECRET"):
-        Settings.from_env("webhooks")
+        Settings.from_env("api")
 
 
-def test_webhooks_surface_does_not_need_admin(configuration):
+def test_api_bootstrap_is_loaded_lazily(configuration):
     configuration.delenv("ADMIN_BOOTSTRAP_TOKEN")
-    assert Settings.from_env("webhooks").admin_bootstrap_token is None
+    assert Settings.from_env("api").admin_bootstrap_token is None
 
 
-def test_service_entrypoints_have_disjoint_route_tables():
+def test_single_api_registers_management_and_webhook_routes():
     from app.main import create_app
-    from app.webhooks import app as receiver
-    management = create_app()
-    management_paths = {route.path for route in management.routes}
-    receiver_paths = {route.path for route in receiver.routes}
-    assert '/webhooks/jira' not in management_paths
-    assert receiver_paths == {'/healthz', '/readyz', '/webhooks/jira'}
-    assert '/v1/auth/tokens' in management_paths
-    assert management_paths & receiver_paths == {'/healthz', '/readyz'}
+    paths = {route.path for route in create_app().routes}
+    assert {'/healthz', '/readyz', '/webhooks/jira', '/v1/auth/tokens', '/v1/schema'} <= paths
+    with pytest.raises(ValueError, match="Unknown service entrypoint"):
+        Settings.from_env("webhooks")
 
 
 def test_schema_and_runtime_startup_never_apply_ddl(env):
@@ -334,15 +330,20 @@ def signed(cfg, key="native-1", payload=None):
                  "X-Hub-Signature": "sha256=" + hmac.new(cfg.webhook_secret.encode(), raw, hashlib.sha256).hexdigest()}
 
 
-def test_network_surfaces_and_private_openapi(env, webhook_client):
+def test_unified_api_keeps_management_and_webhook_auth_independent(env, webhook_client):
     client, _, cfg = env
     assert client.get("/openapi.json", headers={"Authorization": ""}).status_code == 401
-    for path in ("/v1/schema", "/v1/rules", "/openapi.json", "/docs", "/metrics"):
-        assert webhook_client.get(path).status_code == 404
+    for path in ("/v1/schema", "/v1/rules", "/openapi.json", "/metrics"):
+        assert client.get(path, headers={"Authorization": ""}).status_code == 401
+    assert client.get("/docs").status_code == 404
     assert webhook_client.get("/healthz").status_code == 200
     raw, headers = signed(cfg)
     assert webhook_client.post("/webhooks/jira", content=raw, headers=headers).status_code == 202
-    assert client.post("/webhooks/jira", content=raw, headers=headers).status_code == 404
+    assert client.post("/webhooks/jira", content=raw, headers=headers).json()["duplicate"] is True
+    # A valid management token cannot replace the webhook HMAC signature.
+    assert client.post("/webhooks/jira", content=raw).status_code == 401
+    # A webhook signature cannot grant management privileges.
+    assert client.get("/v1/schema", headers={**headers, "Authorization": ""}).status_code == 401
     assert client.get("/v1/schema").status_code == 200
 
 

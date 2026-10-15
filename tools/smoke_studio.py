@@ -53,7 +53,8 @@ def run(args):
             eventually(lambda: command('docker','exec',db,'pg_isready','-U','postgres',check=False).returncode == 0)
             runtime = {'DB_HOST':db,'DB_PORT':'5432','DB_NAME':'automation_test','DB_USER':'postgres',
                        'DB_PASSWORD':password,'TENANT_ID':name,
-                       'ADMIN_BOOTSTRAP_TOKEN':TEST_ADMIN}
+                       'ADMIN_BOOTSTRAP_TOKEN':TEST_ADMIN,
+                       'JIRA_WEBHOOK_SECRET':secrets.token_urlsafe(48)}
             migration = envfile('migration', runtime)
             command('docker','run','--rm','--network',name,'--env-file',migration,args.api_image,'python','-m','app.migrate')
             api = launch('api',args.api_image,runtime,'127.0.0.1::8080')

@@ -49,9 +49,8 @@ def env():
 
 @pytest.fixture
 def webhook_client(env):
-    _, _, settings = env
-    with TestClient(create_app(settings, webhooks=True)) as client:
-        yield client
+    client, _, _ = env
+    yield client
 
 
 def activate(client, text=YAML):

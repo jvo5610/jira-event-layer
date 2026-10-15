@@ -1,17 +1,19 @@
 {
-  "as_of": "2026-10-07",
+  "as_of": "2026-10-15",
   "production_ready": false,
   "runtime_release": "1.0.0; production-equivalent acceptance is required for each deployed revision",
   "implemented_hardening": [
     "Portable image and hardened Compose with optional mounted secrets; no cloud dependency in runtime",
-    "Deny-by-default connector allowlists; explicit immutable installation tenant",
+    "Bitbucket repository allowlist, Jira account permissions and mandatory positive write scope; immutable installation tenant",
     "Transactional checksummed migrations; no startup DDL and fail-closed schema compatibility",
-    "Separate reader/writer/operator/admin service permissions and role audit attribution",
-    "Independent management and webhook network surfaces",
+    "Database-backed expiring API tokens, explicit permissions, one-time bootstrap and one-hour rotation confirmation window",
+    "Single API for management and signed webhooks; independent Bearer/HMAC authorization and operator-managed WAF exposure",
+    "Optional portable jira-relay-studio gateway with delegated token and separate short-lived administrative sessions",
+    "Raw observed event fields and coherent prior-step context discovery with bounded previews",
     "Worker heartbeat, queue age metrics, graceful stop and shared connector write budgets",
     "Dedicated Jira actor suppression with replay prohibition (not general causal tracing)",
     "Bounded payload redaction preserving durable deduplication identifiers",
-    "Disposable container acceptance suite including backup/restore and database upgrade adoption",
+    "Disposable container acceptance suite including backup/restore, versioned upgrades and rejection of unmanaged schemas",
     "Bounded v1 field paths with dots, quoted literal keys and array indexes; JSON Pointer notation is rejected"
   ],
   "scope": "Implementation inventory, not a claim of full Jira Automation parity",
@@ -22,6 +24,13 @@
     "https://support.atlassian.com/cloud-automation/docs/jira-automation-branches/"
   ],
   "cases": [
+    {
+      "id": "assignment-description-append",
+      "status": "unit_and_postgres_integration_passed",
+      "action": "jira.issue.edit append_description on assignment or reassignment to a nonempty account",
+      "native_e2e": false,
+      "limit": "Preserves current ADF but read/modify/write is not atomic against concurrent Jira edits; unassignment does not match"
+    },
     {
       "id": "field-paths-with-literal-keys-and-arrays",
       "status": "unit_and_postgres_integration_passed",
@@ -139,8 +148,9 @@
     },
     {
       "id": "created-comment-linked-webhook-triggers",
-      "status": "planned",
-      "limit": "Webhook currently subscribed only to issue_updated; normalization and E2E needed"
+      "status": "implemented_http_mocked",
+      "native_e2e": false,
+      "limit": "Receiver accepts raw webhookEvent types, including issue_created and comments. Operator must subscribe each type and verify actor availability, payload paths and native E2E; no automatic provider registration"
     },
     {
       "id": "bitbucket-push-pr-build-triggers",
@@ -163,7 +173,7 @@
   "production_gates": [
     "Native E2E tests per action and business case in an explicitly authorized test installation",
     "Dedicated least-privilege identity and credential rotation",
-    "Complete schemas and documented API errors after functionality stabilizes",
+    "Exhaustive provider field metadata/payload coverage; DSL JSON Schema and API error reference are implemented",
     "Per-user identity if required; service-role separation is implemented but is not user RBAC",
     "Causal loop prevention; write budget is only a containment measure",
     "Jira-specific read-only reconciliation for ambiguous results; no blind retry",

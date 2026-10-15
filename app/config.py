@@ -107,11 +107,11 @@ class Settings:
                     for name in (base, base + "_FILE") if name in os.environ]
         if obsolete:
             raise RuntimeError("Legacy API tokens are not supported; use ADMIN_BOOTSTRAP_TOKEN or ADMIN_BOOTSTRAP_TOKEN_FILE: " + ", ".join(obsolete))
-        if mode not in {"api", "webhooks", "worker"}:
+        if mode not in {"api", "worker"}:
             raise ValueError("Unknown service entrypoint")
         settings = cls(database_config(),
                        None,  # Read the bootstrap secret only if the database has never been initialized.
-                       secret("JIRA_WEBHOOK_SECRET", required=mode == "webhooks"),
+                       secret("JIRA_WEBHOOK_SECRET", required=mode == "api"),
                        os.getenv("BITBUCKET_ACCOUNT_EMAIL", ""), secret("BITBUCKET_API_TOKEN"), csv("ALLOWED_REPOSITORIES"),
                        tenant=tenant_id())
         if settings.webhook_secret and (len(settings.webhook_secret) < 32 or not settings.webhook_secret.isascii()):

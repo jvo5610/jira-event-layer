@@ -123,10 +123,9 @@ def main():
             passed.append("unmanaged_schema_rejected_without_data_loss")
 
             common = {**migration, "DB_USER": "runtime", "DB_PASSWORD": runtime_password}
-            management = container("api", {**common, "ADMIN_BOOTSTRAP_TOKEN": admin_bootstrap_token}, port=8080)
-            ingress = container("webhooks", {**common, "JIRA_WEBHOOK_SECRET": hook_secret},
-                                "uvicorn", "app.webhooks:app", "--host", "0.0.0.0", "--port", "8080",
-                                "--no-access-log", "--no-proxy-headers", "--limit-concurrency", "100", port=8080)
+            management = container("api", {**common, "ADMIN_BOOTSTRAP_TOKEN": admin_bootstrap_token,
+                                          "JIRA_WEBHOOK_SECRET": hook_secret}, port=8080)
+            ingress = management
             worker = container("worker", common, "python", "-m", "app.worker")
             admin_url = f"http://127.0.0.1:{port_of(management, 8080)}"
             ingress_url = f"http://127.0.0.1:{port_of(ingress, 8080)}"
@@ -143,9 +142,9 @@ def main():
                 assert client.get(admin_url + "/openapi.json").status_code == 401
                 auth = {"Authorization": "Bearer " + admin_bootstrap_token}
                 assert client.get(admin_url + "/v1/schema", headers=auth).status_code == 200
-                assert client.get(ingress_url + "/v1/schema", headers=auth).status_code == 404
-                assert client.post(admin_url + "/webhooks/jira").status_code == 404
-                passed.append("management_and_webhook_network_isolation")
+                assert client.get(ingress_url + "/v1/schema", headers=auth).status_code == 200
+                assert client.post(admin_url + "/webhooks/jira", headers=auth).status_code == 401
+                passed.append("unified_api_with_independent_bearer_and_hmac_auth")
                 raw = b'{"webhookEvent":"jira:issue_updated","user":{"accountId":"human-fixture"},"issue":{"key":"TEST-1"},"sample.data":[{"ok":true}]}'
                 headers = {"X-Atlassian-Webhook-Identifier": "acceptance-event",
                            "X-Hub-Signature": "sha256=" + hmac.new(hook_secret.encode(), raw, hashlib.sha256).hexdigest()}
@@ -153,7 +152,7 @@ def main():
                 first = client.post(ingress_url + "/webhooks/jira", content=raw, headers=headers)
                 assert first.status_code == 202 and not first.json()["duplicate"]
                 assert client.post(ingress_url + "/webhooks/jira", content=raw, headers=headers).json()["duplicate"]
-                # Registry is shared across independent API/receiver/worker processes.
+                # Registry is shared across independent API/worker processes.
                 with psycopg.connect(**{**owner_database, 'user': 'runtime', 'password': runtime_password}) as conn:
                     conn.execute("INSERT INTO service_actors(provider,account_id) VALUES('jira','relay-service-smoke')")
                     assert not conn.execute("SELECT has_table_privilege(current_user,'service_actors','DELETE')").fetchone()[0]
@@ -175,6 +174,7 @@ def main():
                 passed.append('global_service_actor_exclusion_and_unknown_actor_fail_closed')
                 command("docker", "restart", ingress)
                 ingress_url = f"http://127.0.0.1:{port_of(ingress, 8080)}"
+                admin_url = ingress_url
                 eventually(lambda: client.get(ingress_url + "/readyz").status_code == 200)
                 assert client.post(ingress_url + "/webhooks/jira", content=raw, headers=headers).json()["duplicate"]
                 assert client.post(ingress_url + '/webhooks/jira', content=own_raw, headers=own_headers).json()['ignored_reason'] == 'ignored_service_actor'
@@ -249,7 +249,7 @@ actions:
             secret_directory = Path(temporary) / "secrets"
             initialize(secret_directory, runtime_password, db_password)
             config = envfile("compose.env", {"TENANT_ID": "portable-smoke", "AUTOMATION_IMAGE": args.image,
-                             "AUTOMATION_SECRETS_DIR": secret_directory, "ADMIN_PORT": "0", "WEBHOOK_PORT": "0",
+                             "AUTOMATION_SECRETS_DIR": secret_directory, "API_PORT": "0",
                              "DB_HOST": db, "DB_PORT": "5432", "DB_NAME": "automation_test", "DB_USER": "runtime", "DB_MIGRATION_USER": "owner"})
             override = Path(temporary) / "network.json"
             override.write_text(json.dumps({"networks": {"default": {"external": True, "name": name}}}))
@@ -276,13 +276,14 @@ actions:
                             diagnostic = diagnostic.replace(value, "[redacted]")
                     raise RuntimeError("Compose acceptance failed: " + diagnostic[-5000:])
                 address = command(*compose, "port", "api", "8080").stdout.decode().strip()
-                public_address = command(*compose, "port", "webhooks", "8080").stdout.decode().strip()
+                public_address = address
                 with httpx.Client(timeout=5, trust_env=False) as client:
                     eventually(lambda: client.get("http://" + address + "/readyz").status_code == 200)
                     eventually(lambda: client.get("http://" + public_address + "/readyz").status_code == 200)
                     token = active_api_token  # Persisted rotated identity; the new bootstrap env is ignored.
                     assert client.get("http://" + address + "/v1/schema", headers={"Authorization": "Bearer " + token}).status_code == 200
-                    assert client.get("http://" + public_address + "/v1/schema").status_code == 404
+                    assert client.get("http://" + public_address + "/v1/schema").status_code == 401
+                    assert client.post("http://" + address + "/webhooks/jira").status_code == 401
                     eventually(lambda: command(*compose, "exec", "-T", "worker", "python", "-m", "app.health", "worker", check=False).returncode == 0)
                 passed.append("shipped_compose_installation_and_mounted_secrets")
             except RuntimeError as exc:

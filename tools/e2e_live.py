@@ -93,7 +93,8 @@ def run(args):
         raise RuntimeError("Live acceptance creates remote resources. Pass --allow-remote-writes explicitly")
     stamp = uuid.uuid4().hex[:12]
     name = "automation-live-" + stamp
-    config = {"TENANT_ID": name, "ADMIN_BOOTSTRAP_TOKEN": secrets.token_urlsafe(48)}
+    config = {"TENANT_ID": name, "ADMIN_BOOTSTRAP_TOKEN": secrets.token_urlsafe(48),
+              "JIRA_WEBHOOK_SECRET": secrets.token_urlsafe(48)}
     if args.provider in {"bitbucket", "all"}:
         for key in ("BITBUCKET_ACCOUNT_EMAIL", "BITBUCKET_API_TOKEN"):
             config[key] = required(key)

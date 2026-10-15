@@ -67,16 +67,16 @@ class TokenCreation(BaseModel):
     expires_in_seconds: int = Field(ge=60, le=31536000, strict=True)
 
 
-def create_app(settings=None, store=None, authenticator=None, *, webhooks=False):
+def create_app(settings=None, store=None, authenticator=None):
     @asynccontextmanager
     async def lifespan(app):
-        app.state.settings = settings or Settings.from_env("webhooks" if webhooks else "api")
+        app.state.settings = settings or Settings.from_env("api")
         app.state.store = store or Store(app.state.settings.database, app.state.settings.tenant)
         await run_in_threadpool(app.state.store.open)
         try:
             cfg = app.state.settings
             app.state.tokens = TokenManager(app.state.store, cfg.auth_rotation_ttl)
-            if authenticator is None and not webhooks:
+            if authenticator is None:
                 supplier = lambda: cfg.admin_bootstrap_token if cfg.admin_bootstrap_token is not None else secret("ADMIN_BOOTSTRAP_TOKEN")
                 await run_in_threadpool(app.state.tokens.bootstrap, supplier, cfg.webhook_secret)
             app.state.authenticator = authenticator or DatabaseAuthenticator(app.state.tokens)
@@ -84,7 +84,7 @@ def create_app(settings=None, store=None, authenticator=None, *, webhooks=False)
         finally:
             await run_in_threadpool(app.state.store.close)
 
-    app = FastAPI(title="Automation API", version="1.0.0", lifespan=lifespan,
+    app = FastAPI(title="Jira Relay API", version="1.0.0", lifespan=lifespan,
                   openapi_url=None, docs_url=None, redoc_url=None,
                   description="Single-tenant deterministic automation engine. Separate API, workers and PostgreSQL; no cloud dependency.")
     bearer = HTTPBearer(auto_error=False)
@@ -104,7 +104,7 @@ def create_app(settings=None, store=None, authenticator=None, *, webhooks=False)
         management = path.startswith("/v1/") or path in {"/metrics", "/openapi.json", "/docs", "/redoc"}
         # Set audit attribution in the async context before sync handlers are dispatched.
         try:
-            identity = await request.app.state.authenticator.authenticate(request.headers.get("Authorization", "")) if management and not webhooks else None
+            identity = await request.app.state.authenticator.authenticate(request.headers.get("Authorization", "")) if management else None
         except (OperationalError, PoolTimeout):
             return JSONResponse({"detail": "Authentication persistence unavailable"}, status_code=503)
         request.state.identity = identity
@@ -440,10 +440,6 @@ def create_app(settings=None, store=None, authenticator=None, *, webhooks=False)
                 + "# TYPE automation_workers_healthy gauge\n" + f'automation_workers_healthy {gauges["workers"]}\n'
                 + "# TYPE automation_oldest_pending_seconds gauge\n" + f'automation_oldest_pending_seconds {gauges["oldest_pending"]}\n')
 
-    # Entrypoints have disjoint route tables, not environment-selected exposure.
-    app.router.routes[:] = [route for route in app.router.routes
-        if route.path in {"/healthz", "/readyz"}
-        or (route.path.startswith("/webhooks/") if webhooks else not route.path.startswith("/webhooks/"))]
     return app
 
 

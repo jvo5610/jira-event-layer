@@ -1,15 +1,63 @@
-# Jira Event Layer
+# Jira Relay
 
 [![CI](https://github.com/jvo5610/jira-event-layer/actions/workflows/ci.yml/badge.svg)](https://github.com/jvo5610/jira-event-layer/actions/workflows/ci.yml)
 
-An open-source, API-first event layer for Jira Cloud. Receive native webhooks, persist events in
-PostgreSQL, evaluate versioned YAML rules, and execute deterministic Jira or Bitbucket actions.
-The frontend is optional. No LLM, Redis, SQS or specific cloud is required.
+Motor de automatización para Jira Cloud: recibe webhooks, conserva los eventos en PostgreSQL,
+evalúa reglas YAML versionadas y ejecuta acciones Jira o pipelines Bitbucket. **jira-relay-studio**
+es su editor visual opcional. La API unifica gestión y webhooks; API, worker y Studio son procesos independientes:
+pueden correr como servicios en Docker, Kubernetes, ECS o una VM, sin cambiar el código.
+No requiere LLM, Redis, SQS ni un proveedor cloud específico.
 
-**Version 1.0.0 candidate; not production-certified.** This is not a complete replacement for
-Jira Automation. Jira create/clone/edit/transition/comment/link/get and Bitbucket pipeline actions are
-implemented. Scheduling, action branching, broad JQL fanout, JSM features and other providers are not.
-See [capabilities and production gates](use-cases.json). Not affiliated with Atlassian.
+**Contrato v1, versión 1.0.0 candidata; sin certificación general de producción.** Hay ocho acciones,
+hasta diez pasos secuenciales por regla y filtros deterministas. No hay paridad completa con Jira
+Automation/Make: no implementa scheduling, routers/paralelismo, fanout JQL, compensaciones ni JSM
+específico. El [inventario de capacidades](use-cases.json) y los [pendientes de producción](#pendiente-para-producción)
+separan implementación de aceptación operativa. No está afiliado a Atlassian. Licencia [MIT](LICENSE).
+
+El nombre del repositorio y del paquete Python sigue siendo `jira-event-layer`; el producto se llama
+Jira Relay, el frontend `jira-relay-studio` y el contrato YAML `automation/v1`. No son servicios distintos.
+
+## Por dónde empezar
+
+| Necesitás | Leer |
+| --- | --- |
+| Entender componentes y recorrido de un evento | [Modelo de ejecución](#modelo-de-ejecución) y [componentes](#componentes) |
+| Probar un clon sin cuentas externas | [Quick start](#quick-start) |
+| Instalar servicios separados | [Instalación sin Compose](#instalación-como-servicios-independientes-sin-compose) y [variables por servicio](#mapa-por-servicio) |
+| Conectar Jira de verdad | [Token Bearer](#api-token-de-cuenta-de-servicio-bearer) y [webhook firmado](#conectar-el-webhook-real-de-jira) |
+| Crear, probar y activar una regla | [Primer flujo](#primer-flujo-asignación-y-descripción) y [guía HTTP reproducible](docs/technical-reference.md#recorrido-http-validar-evaluar-guardar-y-activar) |
+| Aprender todas las variantes YAML | [DSL y filtros](#yaml-y-filtros), [referencia de acciones](docs/technical-reference.md#acciones-entradas-y-resultados) y [catálogo comentado](examples/all-v1-variations.yaml) |
+| Usar el editor y sus sugerencias | [Guía de Studio](docs/studio.md) |
+| Emitir/rotar tokens | [Autenticación](#api) y [rotación](#emisión-revocación-y-rotación-de-credenciales) |
+| Operar, migrar o recuperar una instalación | [Operación](#operación-y-actualización), [migraciones](#migraciones-de-postgresql) y [diagnóstico](docs/technical-reference.md#diagnóstico-y-recuperación) |
+| Modificar código o trabajar con una IA | [Mapa del código](docs/technical-reference.md#mapa-del-código-y-fuentes-de-verdad), [pruebas](#desarrollo), [contribución](CONTRIBUTING.md) y [seguridad](SECURITY.md) |
+
+Este README es la entrada operativa; los documentos enlazados son parte de la documentación del
+mismo checkout, no instrucciones de un laboratorio externo. El schema y OpenAPI autenticados
+de la instancia son el contrato ejecutable. No asumir capacidades por el aspecto del editor.
+
+## Modelo de ejecución
+
+1. Jira envía un webhook firmado a `/webhooks/jira` de la API. Alternativamente, un operador autorizado ingresa
+   un evento por la API; esta segunda vía no autentica la identidad declarada del actor Jira.
+2. La API verifica firma/identidad de entrega y persiste el evento. Se excluyen las cuentas
+   conocidas del servicio; un evento Jira sin actor inequívoco queda retenido, no se ejecuta.
+3. En la misma transacción se comparan las reglas activas, se guarda la explicación del filtro y
+   se crean ejecuciones para las coincidencias. Un `202` confirma persistencia, **no éxito en Jira**.
+4. El worker toma una ejecución durable, verifica identidad/permisos y controles de seguridad,
+   resuelve sus datos y despacha un paso. Guarda resultados para los pasos siguientes.
+5. Una acción Jira exitosa permite avanzar; un pipeline se sigue hasta conocer su resultado.
+   Fallos ambiguos de escritura requieren revisión, no una repetición automática.
+6. API y Studio permiten inspeccionar evento, decisión, versión exacta, pasos y errores.
+
+Una **regla** tiene un `name` estable y revisiones inmutables; una **versión activa** recibe nuevos
+eventos. Un **evento** es una entrega persistida; una **ejecución** (`run`) es el procesamiento de
+ese evento por una regla/versión. Un **paso** es una acción de esa ejecución. Guardar un borrador
+no lo activa. Activar una versión no reproduce el histórico automáticamente.
+
+`TENANT_ID` identifica una instalación y su base dedicada: no se elige por request ni sirve para
+compartir una DB entre empresas. No es el Jira Cloud ID. Los checksums de reglas, entregas y
+migraciones tienen finalidades distintas: [detalle técnico](docs/technical-reference.md#datos-checksums-y-tenant).
 
 ## Quick start
 
@@ -18,8 +66,9 @@ For the optional, runtime-configured visual editor, see
 independently of Docker, Kubernetes, ECS or other deployment choices. It covers the v1 actions and filters,
 maps observed event fields, and uses the same versioned API and worker.
 
-Prerequisites: Git, Python 3.12+, [uv](https://docs.astral.sh/uv/getting-started/installation/),
-Docker Engine with Compose v2. macOS or Linux; Windows users can use WSL2 with Docker integration.
+Requisitos para la prueba reproducible: Git, Python 3.12+, [uv](https://docs.astral.sh/uv/getting-started/installation/),
+Docker Engine con Compose v2. En Windows, usar WSL2 con integración Docker.
+Son requisitos de esta prueba, no dependencias del motor dentro de una instalación.
 
 ```sh
 git clone https://github.com/jvo5610/jira-event-layer.git
@@ -27,11 +76,11 @@ cd jira-event-layer
 python3 tools/selftest.py --full
 ```
 
-This installs locked dependencies, runs tests against disposable PostgreSQL, builds the container,
-and verifies the shipped Compose installation, migrations, isolation, restart and backup/restore.
-It needs no cloud credentials and makes no Jira/Bitbucket calls. Only its own temporary resources are removed.
+Instala dependencias fijadas, ejecuta tests con PostgreSQL descartable, construye el contenedor y
+verifica instalación, migraciones, aislamiento, reinicio y backup/restauración del empaquetado Compose.
+No usa credenciales externas ni llama a Jira/Bitbucket. Sólo elimina sus propios recursos temporales.
 
-To start a local development instance:
+Para iniciar una instancia local de desarrollo:
 
 ```sh
 python3 tools/local_config.py
@@ -39,28 +88,15 @@ docker compose -p jira-event-layer-dev -f compose.dev.yaml up -d --build
 curl --fail http://127.0.0.1:8088/readyz
 ```
 
-The generated `.env` contains a private `ADMIN_BOOTSTRAP_TOKEN`. Management endpoints require
-`Authorization: Bearer <ADMIN_BOOTSTRAP_TOKEN>`; start with `GET /v1/schema` and `GET /openapi.json`.
-Keep tokens out of shell history, commits and rules. Stop development services with
-`docker compose -p jira-event-layer-dev -f compose.dev.yaml down` (database volume is preserved).
+El `.env` generado contiene un `ADMIN_BOOTSTRAP_TOKEN` privado. La API usa
+`Authorization: Bearer <token>`; comenzar por `GET /v1/schema` y `GET /openapi.json`.
+No poner tokens en historial de shell, commits ni reglas. Para detener:
+`docker compose -p jira-event-layer-dev -f compose.dev.yaml down` (conserva el volumen de DB).
 
-For self-hosted installations, use `compose.yaml` with operator-supplied PostgreSQL and mounted secrets;
-the same image runs separate API, webhook receiver and worker processes. Do not expose management APIs
-publicly. Kubernetes/ECS deployments are operator-managed, not bundled or certified.
-
-Rules are saved as inactive drafts, evaluated without effects, and activated explicitly with version
-and checksum. Connectors are disabled until their allowlists and credentials are configured.
-See [examples](examples), [contributing](CONTRIBUTING.md), [security](SECURITY.md), and the operational
-reference below (Spanish). Licensed under [MIT](LICENSE).
-
-## Referencia operativa (español)
-
-Backend independiente del front para **guardar jobs/reglas YAML, comparar filtros y ejecutar sobre eventos**.
-Motor single-tenant portable. Cada instalación tiene su propia base, identidad y credenciales.
-No necesita un LLM para ejecutar. Las instalaciones de laboratorio no son dependencias del producto.
-
-Versión 1.0.0 en preparación: primera versión del contrato público, con cambios rompientes intencionales.
-No está certificada para producción ni publicada como release. Ver los gates pendientes al final.
+Esto es desarrollo, no una instalación productiva. [Servicios independientes](#instalación-como-servicios-independientes-sin-compose)
+es el contrato de despliegue; `compose.yaml` es sólo un empaquetado opcional con PostgreSQL del operador.
+No publicar administración sin controles de acceso. Studio se instala por separado según
+[su guía](docs/studio.md); no es necesario para usar la API.
 
 ## Probar desde un clon limpio
 
@@ -132,25 +168,17 @@ No cambiar a público un repositorio privado anterior sin revisar también todo 
 - API FastAPI: validación, revisiones inmutables, activación/rollback, evaluación, comparación e histórico.
 - Postgres: YAML original + especificación normalizada + checksum, raw events, decisiones, ejecuciones y auditoría.
 - Worker independiente: cola transaccional en la misma base, Bitbucket Pipelines y seguimiento hasta su resultado.
-- Front: no implementado ni requerido. Cualquier UI/CLI/agente consume este mismo contrato HTTP.
+- API única: incluye `/webhooks/jira` y gestión `/v1/*` en el mismo proceso y puerto.
+- jira-relay-studio: React + gateway Python; editor visual opcional sobre el mismo contrato HTTP.
 
-Dependencias fijadas en uv.lock. Sin Redis, SQS, editor visual ni código arbitrario dentro del YAML.
-No se promete paridad completa con Jira Automation. Bitbucket y las siete acciones Jira están
-verificadas contra proveedores reales desde la API autenticada. El flujo nativo Jira hacia Bitbucket
-se volvió a verificar el 2026-10-07 desde una instalación vacía basada en el commit dfdebe2:
-transición real → webhook firmado → persistencia → regla YAML → pipeline NO-OP exitoso.
-También pasaron el filtro negativo, la entrega duplicada y evaluate/compare sin efectos externos.
-La actualización de sintaxis del commit 48b45b8 completó 244 tests y 9 controles de aceptación Docker;
-CI pasó en Python 3.12 y 3.13. Se repitieron las acciones Jira y el pipeline Bitbucket reales desde
-la API autenticada, incluyendo filtros negativos, guardas, etiquetas y deduplicación.
-El mismo commit quedó desplegado en el laboratorio: la revisión 2 con referencias por puntos
-pasó el webhook nativo Jira → Bitbucket (pipeline #4 exitoso), filtro negativo y replay duplicado
-sin otra ejecución. La revisión 1 y su checksum permanecieron intactos; claves literales e índices
-se verificaron además mediante evaluate positivo/negativo sin efectos, no como campos nativos Jira.
-Esta evidencia de laboratorio no certifica producción ni sustituye las pruebas de cada operador.
-Subtareas y asignación todavía tienen pruebas simuladas, no aceptación contra Jira real.
-El inventario de capacidades y brechas está en use-cases.json.
-Admite hasta diez acciones secuenciales por regla. No hay branching de acciones ni compensaciones aún.
+Dependencias Python fijadas en `uv.lock`, frontend en `frontend/package-lock.json`.
+No hay código arbitrario dentro del YAML. Se han realizado pruebas reales de acciones Jira y
+pipeline Bitbucket, además del recorrido webhook nativo → motor → Bitbucket. Esa evidencia
+histórica no certifica todos los cambios posteriores: cada release y cada instalación deben
+validar sus credenciales, permisos, recursos y recorrido efectivo. La suite reproducible usa
+PostgreSQL real y respuestas de proveedor simuladas; las pruebas remotas son opt-in.
+Ver [pruebas con proveedores reales](#pruebas-con-proveedores-reales),
+[CI](.github/workflows/ci.yml) y [brechas conocidas](#pendiente-para-producción).
 
 ## API
 
@@ -236,11 +264,14 @@ validar emisión, audience/issuer, permisos y revocación/expiración según el 
 | Endpoint | Función |
 |---|---|
 | GET /v1/schema | JSON Schema del DSL, para agentes y futuros editores |
+| GET /v1/catalog | Schema, eventos observados, configuración declarada de conectores y límites del editor |
+| GET /v1/catalog/fields?source=jira&event_type=... | Rutas/tipos/ejemplos de los últimos 100 eventos del tipo elegido |
 | POST /v1/rules/validate | Validar YAML sin guardar |
 | POST /v1/rules | Guardar YAML como nueva revisión; no activar automáticamente |
 | GET /v1/rules | Listar reglas y versión activa |
 | GET /v1/rules/{name}/versions | Histórico de revisiones |
 | GET /v1/rules/{name}/versions/{version} | Recuperar YAML y spec |
+| GET /v1/rules/{name}/versions/{version}/context?before_step=N | Contexto histórico anterior al paso N; sólo lectura |
 | POST /v1/rules/{name}/activate | Activar/rollback con version y sha256 explícitos |
 | POST /v1/rules/{name}/disable | Desactivar nuevos eventos y frenar pasos pendientes; no revierte llamadas ya enviadas |
 | POST /v1/evaluate | YAML + payload o event_ids; devuelve explicación, sin ejecutar |
@@ -260,6 +291,53 @@ Comparación: {"left_yaml":"...","right_yaml":"...","event_ids":["uuid"]}.
 Ingesta: {"source":"jira","event_type":"jira:issue_updated","payload":{...}}.
 
 ## YAML y filtros
+
+### Primer flujo: asignación y descripción
+
+Este flujo agrega `Se asigno!` al final de la descripción del ticket que se asignó o reasignó.
+No coincide al desasignar ni al modificar otro campo. Cambiar `KAN` por el proyecto autorizado;
+el ejemplo no configura ni crea ese proyecto. No poner el account ID del servicio como actor
+de una prueba real: sus eventos se ignoran por diseño.
+
+```yaml
+apiVersion: automation/v1
+kind: Rule
+name: al-asignar-descripcion
+description: Agrega un párrafo cuando se asigna el ticket a una persona.
+trigger:
+  source: jira
+  event: jira:issue_updated
+when:
+  all:
+    - {path: issue.fields.project.key, op: eq, value: KAN}
+    - some:
+        path: changelog.items
+        where:
+          all:
+            - {path: fieldId, op: eq, value: assignee}
+            - {path: to, op: exists, value: true}
+            - {path: to, op: ne, value: null}
+            - {path: to, op: ne, value: ""}
+actions:
+  - type: jira.issue.edit
+    issue: {path: issue.key}
+    append_description: {value: "Se asigno!"}
+```
+
+En Studio: crear/importar el YAML, validar, guardar una revisión y probar las condiciones en
+**Tests y versiones**. La evaluación sólo prueba trigger/filtro: no ejecuta acciones ni asegura
+que Jira aceptará sus campos/permisos. Activar explícitamente la revisión y su checksum cuando
+el operador esté listo para efectos reales. Luego asignar un ticket desde otra cuenta, inspeccionar
+el evento y su ejecución, y comprobar en Jira el nuevo párrafo. La actualización generada por la
+cuenta del servicio se conserva como ignorada y no vuelve a ejecutar el flujo.
+
+Para editar el padre, cambiar solamente el destino a `issue: {path: issue.fields.parent.key}`.
+Para tomar un valor de una consulta previa, usar por ejemplo
+`fields: {summary: {path: '_steps["0"].fields.summary'}}` en un paso posterior al `jira.issue.get`.
+La ruta del evento y la salida de un paso son fuentes distintas; ver
+[contexto de ejecución y acciones](docs/technical-reference.md#contexto-y-bindings).
+
+### Contrato general
 
 Ver `examples/repository-request.yaml` para un flujo breve y
 `examples/all-v1-variations.yaml` como catálogo comentado de todas las variantes v1.
@@ -343,11 +421,11 @@ requeridos por la aplicación. Verificar IDs y permisos propios antes de activar
 ## Acciones Jira — implementación local, validación de proveedores separada
 
 - jira.issue.create: crear un ticket con campos literales o tomados del evento; parent permite subtareas.
-- jira.issue.clone: copiar sólo campos seleccionados de una tarjeta administrada; no es un clon completo.
+- jira.issue.clone: copiar sólo campos seleccionados de un ticket accesible a la cuenta; no es un clon completo.
 - jira.issue.edit: modificar campos autorizados, incluidos assignee, labels y customfields habilitados por el servidor.
 - jira.issue.transition: consultar el estado actual y transiciones disponibles; destino por ID de estado.
 - jira.comment.add: comentario de texto convertido a ADF.
-- jira.issue.link: vincular dos tarjetas administradas mediante un ID de tipo de vínculo.
+- jira.issue.link: vincular dos tickets accesibles a la cuenta mediante un ID de tipo de vínculo.
 - jira.issue.get: leer la tarjeta actual y, opcionalmente, detener la secuencia si no cumple require.
 
 `jira.issue.edit` también admite `append_description: {value: "Se asigno!"}`:
@@ -456,6 +534,30 @@ la nueva. No confundir las pruebas locales con una validación real de autentica
 
 Referencia: [API tokens de cuentas de servicio y autenticación Bearer (Atlassian)](https://support.atlassian.com/user-management/docs/manage-api-tokens-for-service-accounts/).
 
+### Conectar el webhook real de Jira
+
+El operador publica la API por HTTPS y registra en Jira la URL
+`https://<host-api>/webhooks/jira`. Gestión y webhook comparten proceso/puerto; el WAF/proxy
+decide qué rutas son públicas y cuáles restringir. Configurar en Jira el mismo secreto que `JIRA_WEBHOOK_SECRET`/`_FILE`
+y seleccionar los eventos y el alcance que la instalación necesita. El motor no registra
+webhooks automáticamente ni crea sitios, proyectos o cuentas Atlassian.
+
+El contrato de ingreso exige:
+
+- Body JSON nativo, sin envolverlo en `source/payload`; `webhookEvent` contiene el tipo de evento.
+- `X-Hub-Signature: sha256=<hex>`: HMAC-SHA256 sobre los **bytes exactos** del body usando el
+  secreto del webhook. No es el token Bearer de Jira ni el token de nuestra API.
+- `X-Atlassian-Webhook-Identifier`: identidad estable de la entrega, de 1 a 250 caracteres.
+  Reintentos deben conservar identificador y body; mismo ID con bytes distintos produce 409.
+
+El proxy no debe transformar JSON ni descartar esos headers. Una modalidad de webhook que
+no entregue firma/identificador compatibles **no se conecta quitando la validación**: hace falta
+resolver esa integración antes. Validar desde Jira un evento humano y otro generado por el
+servicio: el primero debe llegar y ejecutarse si coincide; el segundo debe quedar ignorado.
+Consultar los [webhooks de Jira Cloud](https://developer.atlassian.com/cloud/jira/platform/webhooks/)
+para el mecanismo de registro disponible en la organización. Firma válida no implica actor
+inequívoco: los eventos sin actor admitido quedan retenidos por la política global.
+
 ### Identificación legible de tickets
 
 Al crear o clonar, el motor agrega `automation-flujo-<name>` usando exactamente el `name` del YAML.
@@ -541,7 +643,7 @@ cada regla antes de activarla, y usar una cuenta de servicio con permisos mínim
 No es una opción de cada regla ni una lista manual en env vars. Antes de ejecutar tareas con el
 conector Jira configurado, el worker identifica la cuenta del token mediante `GET /rest/api/3/myself`
 y persiste su `accountId` en DB. Si no puede verificarla, no despacha acciones; requiere un token
-con `read:jira-user` además de los scopes de trabajo. No hay que darle ese token al receptor.
+con `read:jira-user` además de los scopes de trabajo. La API no lo necesita para recibir webhooks.
 Si una consulta de ticket devuelve 200 pero `/myself` devuelve 401 con `scope does not match`,
 la credencial no habilita la identificación de su cuenta: emitir un token con `read:jira-user` y
 actualizar su fuente de secreto. No desactivar la verificación ni inferir el sujeto desde un ticket.
@@ -583,8 +685,10 @@ No hay reconciliación automática Jira aún; /reconcile sólo acepta pipelines 
 La exclusión de cuentas del servicio es global y persistente, descrita arriba.
 La comprobación de estado antes de transicionar no es atómica con cambios concurrentes en Jira.
 
-La suite incluye Postgres real y proveedor HTTP simulado para las nuevas acciones.
-Los esquemas descriptivos completos y los gates de producción siguen pendientes; más acciones no implica production-ready.
+La suite incluye Postgres real y proveedor HTTP simulado para fallos controlados.
+El JSON Schema del DSL está publicado; no es un schema exhaustivo de los payloads Jira ni
+garantiza todos los custom fields de una organización. Los gates operativos siguen pendientes;
+más acciones no implica production-ready.
 
 ## Desarrollo
 
@@ -607,6 +711,57 @@ descartable con permisos CREATEDB/CREATEROLE (o el superusuario de `tools/selfte
 Usan Postgres real y mock HTTP del proveedor para fallos controlados. Eso no sustituye la prueba E2E con Jira/Bitbucket reales.
 
 ## Instalación portable
+
+### Instalación como servicios independientes (sin Compose)
+
+Requisitos de ejecución: PostgreSQL (CI usa 17), red de cada proceso hacia la DB y HTTPS saliente
+del worker hacia los proveedores habilitados. Python 3.12+ si se ejecuta desde fuentes; la imagen
+incluye Python y dependencias. Node 22 se usa para construir Studio, no en su runtime.
+No se necesita instalar Docker CLI, AWS SDK ni kubectl dentro de los servicios.
+
+1. Crear una base **dedicada** con esquema `public` vacío y dos roles: propietario migrador y
+   runtime sin superusuario/DDL. No usar el mismo usuario para ambos en producción.
+2. Construir imágenes desde el mismo commit: `docker build -t jira-relay:<release> .` y,
+   si se usa GUI, `docker build -f frontend/Dockerfile -t jira-relay-studio:<release> .`.
+   Publicarlas en el registro del operador y desplegar por digest. Desde fuentes, instalar
+   `uv sync --frozen --no-dev`; los comandos siguientes corren dentro del entorno instalado.
+3. Inyectar los [parámetros de cada servicio](#mapa-por-servicio), no un `.env` completo en todos.
+   Usar el mismo `TENANT_ID` y DB en API y worker. Nunca montar la credencial del
+   migrador en procesos runtime. El código no carga `.env` ni consulta gestores cloud.
+4. Con variables del **migrador**, ejecutar `python -m app.migrate --status` y
+   `python -m app.migrate`. No iniciar runtime antes de completar este trabajo.
+5. Conectar `psql` como propietario y ejecutar:
+
+   ```sh
+   psql -v ON_ERROR_STOP=1 -v runtime_role=jira_relay_runtime -f deploy/runtime-grants.sql
+   ```
+
+   La conexión de `psql` se configura fuera del producto (por ejemplo `PGHOST`, `PGPORT`,
+   `PGDATABASE`, `PGUSER` y un `PGPASSFILE` privado). `DB_*` son parámetros de la aplicación,
+   **no** variables que `psql` lea automáticamente. El archivo SQL está en el checkout, no
+   dentro de la imagen mínima del backend. Volver a conceder permisos tras nuevas migraciones.
+6. Iniciar la **API** con su bloque de variables y el comando documentado abajo. En el primer
+   arranque registra el administrador de `ADMIN_BOOTSTRAP_TOKEN`/`_FILE`; conservarlo en un
+   gestor de secretos. Verificar `/readyz` y una consulta autenticada a `/v1/schema`.
+7. Iniciar el **worker** con sus credenciales de proveedor; validar `/myself`, heartbeat y
+   permisos efectivos. La **API** ya recibe webhooks con su secreto HMAC. Sobrescribir el healthcheck
+   de la imagen al ejecutar worker con `python -m app.health worker`; migración es un job,
+   sin probe de servidor. En API, `/healthz` y `/readyz` usan el puerto elegido.
+8. Publicar la API mediante HTTPS con límites de tasa/conexiones/tiempos. Restringir gestión
+   por WAF/proxy/red según la política del operador; mantener DB privada. Registrar el webhook
+   y probar su recorrido según la sección anterior. La aplicación conserva Bearer y HMAC independientes.
+9. Emitir un token delegado, instalar Studio según [su guía](docs/studio.md) y configurar su
+   backend/origen público al arrancar. No darle acceso a DB ni credenciales Jira/Bitbucket.
+10. Guardar, validar y simular reglas antes de activarlas. Ensayar backup/restauración, alertas,
+    rotación de credenciales y carga de la instalación antes de habilitar uso compartido real.
+
+Cada comando es un proceso separado con su propio entorno. La API escucha en 8080 por defecto
+dentro de la imagen; los otros servicios pueden usar el mismo puerto en sus propias redes.
+Cambiar `--port` exige adaptar la probe (la probe empaquetada `app.health api` consulta 8080).
+Dar al backend un cierre ordenado de 150 segundos; Studio tiene su propio shutdown de 30 segundos.
+El operador controla exposición, TLS, recursos, despliegue, secretos y agenda de mantenimiento.
+
+### Empaquetado opcional con Compose
 
 La misma imagen ejecuta API (comando por defecto), worker (`python -m app.worker`), migraciones
 (`python -m app.migrate`) y mantenimiento (`python -m app.retention`). Sólo necesita PostgreSQL y
@@ -651,17 +806,16 @@ afectado. Los tokens de nuestra API se emiten, revocan y rotan en DB sin reinici
 token del gateway, actualizar su secreto y reiniciar el gateway antes de confirmar. No hay recarga en
 caliente de archivos ni período de doble clave de webhook en esta versión.
 
-Compose publica administración sólo en 127.0.0.1:8088 y webhooks sólo en 127.0.0.1:8089. Poner delante
-del segundo un proxy HTTPS con límites de conexión, tiempo y tasa. Nunca publicar el primero sin una
-red privada/control de acceso. `app.webhooks:app` no registra rutas administrativas y
-`app.main:app` no registra webhooks: el servicio lo define su punto de entrada, no una env var.
+Compose publica una única API en 127.0.0.1:8088 (`API_PORT`). Poner delante un proxy/WAF HTTPS
+con límites de conexión, tiempo y tasa, y reglas de acceso por ruta. `app.main:app` registra
+gestión y webhook; no existe otro punto de entrada ni una env var `API_SURFACE` para separarlos.
 No montar el socket Docker en ningún componente. El frontend no es necesario para operar.
 
 | Plataforma | Mapeo del mismo contrato de ejecución |
 |---|---|
 | Compose | compose.yaml; servicios separados, migración previa y secretos por archivo |
-| Kubernetes | Deployments para API/worker, Job previo para migrar, Secret/volumen, probes; ingress sólo al receptor |
-| ECS | Services para API/worker, tarea puntual previa para migrar, secretos inyectados; balanceador sólo al receptor |
+| Kubernetes | Deployments para API/worker, Job previo para migrar, Secret/volumen, probes; ingress/WAF con política por ruta |
+| ECS | Services para API/worker, tarea puntual previa para migrar, secretos inyectados; balanceador/WAF con política por ruta |
 
 No hay manifiestos K8s/ECS genéricos certificados en esta release. No requieren cambios de código,
 pero deben probarse en la plataforma elegida. Si se agregan hostnames en Kubernetes, usar external-dns
@@ -677,15 +831,22 @@ anterior cuando el valor directo está vacío. Reiniciar los procesos afectados 
 
 ### Mapa por servicio
 
+Plantillas independientes para copiar/adaptar fuera de Git:
+[api](deploy/env/api.env.example), [worker](deploy/env/worker.env.example),
+[migrate](deploy/env/migrate.env.example) y [studio](deploy/env/studio.env.example).
+Usan archivos de secretos montados; cada secreto admite también su env var directa.
+No son archivos Compose ni se cargan automáticamente: el gestor de procesos inyecta cada uno
+en el servicio correspondiente. La plantilla de worker deja conectores deshabilitados hasta configurarlos.
+
 Cada bloque es completo e independiente; no requiere Compose ni heredar otros bloques.
 El operador inyecta estas variables con su plataforma de servicios. Los valores entre `<...>`
 deben reemplazarse; los secretos pueden entregarse directamente o con la alternativa `_FILE`.
 Las rutas de archivos las define el despliegue, no la aplicación. No guardar secretos reales en Git.
 
-#### `api`: API de gestión
+#### `api`: gestión y webhooks
 
 Arranque: `uvicorn app.main:app --host 0.0.0.0 --port 8080 --no-access-log --no-proxy-headers --limit-concurrency 100 --timeout-graceful-shutdown 120`.
-Este punto de entrada no registra rutas `/webhooks/*`.
+Único punto de entrada HTTP: gestión `/v1/*`, webhook `/webhooks/jira` y probes.
 
 ```dotenv
 TENANT_ID=mi-empresa
@@ -695,6 +856,7 @@ DB_NAME=jira_relay
 DB_USER=jira_relay_runtime
 DB_PASSWORD=<secreto-runtime>
 ADMIN_BOOTSTRAP_TOKEN=<secreto-inicial-minimo-32-caracteres>
+JIRA_WEBHOOK_SECRET=<secreto-firma-minimo-32-caracteres-distinto-del-bootstrap>
 AUTH_ROTATION_TTL_SECONDS=3600
 MAX_BODY_BYTES=10485760
 # Opcionales: permiten mostrar el estado del conector en el catálogo.
@@ -707,28 +869,9 @@ ALLOWED_REPOSITORIES=<workspace/repositorio>
 ```
 
 Bootstrap sólo es necesario para registrar el primer administrador en una DB no inicializada.
-Después no se vuelve a usar para autenticar y puede retirarse. No necesita `JIRA_WEBHOOK_SECRET`.
+Después no se vuelve a usar para autenticar y puede retirarse. El secreto de firma se mantiene
+en la API; una credencial Bearer válida no reemplaza la firma HMAC del webhook, ni viceversa.
 Los proyectos y campos Jira se definen en las reglas; no hay allowlists Jira en env vars.
-
-#### `webhooks`: receptor de eventos
-
-Arranque: `uvicorn app.webhooks:app --host 0.0.0.0 --port 8080 --no-access-log --no-proxy-headers --limit-concurrency 100 --timeout-graceful-shutdown 120`.
-No registra API administrativa, OpenAPI ni métricas privadas; sólo webhook y probes.
-
-```dotenv
-TENANT_ID=mi-empresa
-DB_HOST=<host-postgresql>
-DB_PORT=5432
-DB_NAME=jira_relay
-DB_USER=jira_relay_runtime
-DB_PASSWORD=<secreto-runtime>
-JIRA_WEBHOOK_SECRET=<secreto-firma-minimo-32-caracteres>
-MAX_BODY_BYTES=10485760
-```
-
-No recibe bootstrap, tokens administrativos, credenciales Jira ni credenciales Bitbucket.
-El secreto HMAC del receptor no es el API token del proveedor. La exclusión global de actores
-consulta el registro compartido en DB; también se aplica a la ingesta autenticada de la API.
 
 #### `worker`: ejecutor
 
@@ -803,8 +946,7 @@ respuesta; no hay un `MAX_BODY_BYTES` propio de Studio.
 
 | Servicio | Archivos montados en `/run/secrets/` |
 | --- | --- |
-| `api` | `db_runtime_password`, `admin_bootstrap_token`, `jira_api_token`, `bitbucket_api_token` |
-| `webhooks` | `db_runtime_password`, `jira_webhook_secret` |
+| `api` | `db_runtime_password`, `admin_bootstrap_token`, `jira_webhook_secret`, `jira_api_token`, `bitbucket_api_token` |
 | `worker` | `db_runtime_password`, `jira_api_token`, `bitbucket_api_token` |
 | `migrate` | `db_migrator_password` |
 | `studio` | `gui_api_token`, `studio_login_password` |
@@ -814,7 +956,7 @@ El Compose principal utiliza archivos deliberadamente; exportar un secreto en el
 inyecta automáticamente si no está mapeado en el manifest. No configurar ambas variantes.
 
 `AUTOMATION_IMAGE`, `STUDIO_IMAGE`, `AUTOMATION_SECRETS_DIR`, `DB_MIGRATION_USER`,
-`ADMIN_PORT`, `WEBHOOK_PORT`, `STUDIO_BIND_ADDRESS` y `STUDIO_PUBLISHED_PORT` son entradas
+`API_PORT`, `STUDIO_BIND_ADDRESS` y `STUDIO_PUBLISHED_PORT` son entradas
 de **Compose**, no variables que deban agregarse a todos los contenedores. Ver su inventario abajo.
 El archivo [.env.example](.env.example) concentra las entradas del Compose principal, incluido
 el perfil opcional Studio; no es un archivo para inyectar entero en cada servicio.
@@ -833,7 +975,7 @@ y `DB_PASSWORD`/`DB_PASSWORD_FILE`, sin credenciales de proveedores.
 | `DB_USER` | Obligatorio | Usuario de este proceso: runtime o migrador, según el servicio. |
 | `DB_PASSWORD` **†** | Obligatorio, sin valor predeterminado | Contraseña del usuario indicado; alternativa `DB_PASSWORD_FILE`. |
 
-API, worker, webhooks, migraciones, retención y probe del worker usan estos mismos nombres.
+API, worker, migraciones, retención y probe del worker usan estos mismos nombres.
 Sólo el migrador recibe credenciales de propietario/DDL. No hay parámetros SSL propios en este cambio.
 `DATABASE_URL` y `DATABASE_URL_FILE` se rechazan, aunque también estén configurados los parámetros nuevos.
 
@@ -843,7 +985,7 @@ Sólo el migrador recibe credenciales de propietario/DDL. No hay parámetros SSL
 | --- | --- | --- |
 | `ADMIN_BOOTSTRAP_TOKEN` **†** | Sólo en la primera inicialización de la API de gestión | Registra el primer administrador; después se ignora y puede retirarse. No es el token de Jira. |
 | `AUTH_ROTATION_TTL_SECONDS` | `3600`; rango 60–86400 | Ventana para confirmar una rotación con el nuevo token. |
-| `JIRA_WEBHOOK_SECRET` **†** | Obligatorio en el receptor de webhooks | Firma HMAC del webhook entrante, independiente del API token. |
+| `JIRA_WEBHOOK_SECRET` **†** | Obligatorio en la API | Firma HMAC del webhook entrante, independiente del API token. |
 | `MAX_BODY_BYTES` | `10485760` (10 MiB); rango 1024–10485760 | Límite del cuerpo HTTP entrante. GUI admite hasta 10 MiB por solicitud; respuestas hasta 32 MiB. No implica capacidad de carga ilimitada. |
 | `WORKER_ID` | Hostname del proceso | Identidad de heartbeat. Configurar una identidad única por worker si comparten hostname. |
 
@@ -892,13 +1034,12 @@ Estos nombres los consume Compose, no el código del motor:
 | `DB_MIGRATION_USER` | Obligatorio en Compose principal | Se inyecta como `DB_USER` sólo en `migrate`. No lo recibe el runtime. |
 | `AUTOMATION_IMAGE` | `automation-api:1.0.0` | Imagen de API, worker y migrador. |
 | `AUTOMATION_SECRETS_DIR` | `./secrets` | Directorio privado con los archivos de secretos. |
-| `ADMIN_PORT` | `8088` | Publicación en loopback de la API administrativa. |
-| `WEBHOOK_PORT` | `8089` | Publicación en loopback del receptor; el operador agrega su entrada HTTPS. |
+| `API_PORT` | `8088` | Publicación en loopback de la API única; el operador agrega HTTPS/WAF. |
 | `STUDIO_IMAGE` | `jira-relay-studio:1.0.0` | Imagen de GUI. |
 | `STUDIO_BIND_ADDRESS` | `127.0.0.1` | Dirección de publicación de la GUI en el host. |
 | `STUDIO_PUBLISHED_PORT` | `8093` | Puerto de publicación de la GUI en el host. |
 
-El Compose principal monta `db_runtime_password` en API/worker/webhooks y `db_migrator_password`
+El Compose principal monta `db_runtime_password` en API/worker y `db_migrator_password`
 sólo en `migrate`; no se guardan host/base/usuario dentro del archivo de contraseña.
 El perfil `studio` es opcional. En el Compose de GUI independiente, `STUDIO_BACKEND_TOKEN_FILE`
 y `STUDIO_LOGIN_PASSWORD_FILE` indican archivos del host que se montan en el contenedor;
@@ -911,6 +1052,26 @@ los configura automáticamente en recursos descartables; no son parámetros de p
 Retención utiliza argumentos `--days` (90), `--limit` (100) y `--apply` (desactivado), no variables nuevas.
 
 ## Operación y actualización
+
+### Actualizar una instalación con receptor separado
+
+La topología actual tiene **API + worker + Studio opcional**, más el job de migración y la tarea
+de retención. Se eliminó `app.webhooks:app`; no desplegar esta imagen con ese comando antiguo.
+Para pasar de una instalación anterior a esta:
+
+1. Montar `JIRA_WEBHOOK_SECRET`/`_FILE` en la API, conservando exactamente el secreto registrado
+   en Jira. Mantener DB, tenant y credenciales API actuales; no hacer rebootstrap.
+2. Arrancar la nueva API y verificar gestión autenticada y webhook firmado en su mismo puerto.
+3. Apuntar la ruta pública `/webhooks/jira` del proxy/WAF al servicio API. Conservar URL, bytes,
+   firma e identificador de entrega. Restringir `/v1/*`, `/metrics` y `/openapi.json` según política.
+4. Retirar el servicio/contenedor exclusivo de webhooks cuando la nueva ruta esté verificada.
+   En Compose se usa ahora `API_PORT`, no `ADMIN_PORT`/`WEBHOOK_PORT`.
+
+Este cambio de topología no agrega una migración SQL. No cambia por sí solo versiones activas,
+payloads, tokens ni checksums históricos. Actualizar manifests y configuración externos también
+es necesario: hacer `git pull` o pushear el código no modifica una instalación en funcionamiento.
+
+### Salud, retención y cierre ordenado
 
 - /healthz confirma proceso; /readyz confirma DB. Worker: `python -m app.health worker`, con heartbeat
   por contenedor. WORKER_ID debe ser único si se ejecutan varios workers en el mismo hostname.
@@ -948,7 +1109,7 @@ python -m app.migrate
 Ambos comandos leen `DB_HOST`, `DB_PORT` (5432 por defecto), `DB_NAME`, `DB_USER`,
 `DB_PASSWORD` o `DB_PASSWORD_FILE`, y `TENANT_ID`. Salud del worker y mantenimiento usan
 el mismo contrato. El servicio `migrate` de Compose recibe `DB_MIGRATION_USER` como su
-`DB_USER` y monta sólo `db_migrator_password`; API/worker/webhooks montan `db_runtime_password`.
+`DB_USER` y monta sólo `db_migrator_password`; API/worker montan `db_runtime_password`.
 No hay una contraseña de migración accesible al runtime. El Compose de desarrollo es una excepción
 local descartable: usa un único usuario de laboratorio, no es el modelo de permisos de producción.
 
@@ -982,8 +1143,10 @@ al backup: restaurar estado local NO revierte acciones que ya ocurrieron en Jira
 Prueba reproducible sin proveedores: `uv run python tools/smoke_container.py --image automation-api:1.0.0`.
 Crea infraestructura Docker efímera propia, prueba migración/rechazo de esquemas ajenos/roles/reinicio/backup y la elimina al terminar.
 No usa .env, credenciales personales ni bases existentes. Los tests de conectores no equivalen a certificación cloud.
-También levanta el Compose distribuido con secretos montados y verifica la separación de rutas.
-Bitbucket Pipelines ejecuta la suite y pip-audit en pushes y pull requests; no publica ni despliega imágenes.
+También levanta el Compose distribuido con secretos montados y verifica la API única y sus dos mecanismos de autenticación.
+GitHub Actions ejecuta la suite Python 3.12/3.13 con PostgreSQL, pruebas/build de frontend,
+auditoría de dependencias y aceptación Docker/Studio en pushes y pull requests.
+No publica ni despliega imágenes; ver [workflow](.github/workflows/ci.yml).
 El escaneo de paquetes Python no cubre paquetes del sistema operativo ni equivale a una auditoría de seguridad.
 
 Referencias operativas: [secretos de Compose](https://docs.docker.com/compose/how-tos/use-secrets/),
@@ -994,9 +1157,11 @@ Referencias operativas: [secretos de Compose](https://docs.docker.com/compose/ho
 
 E2E nativo de cada acción Jira; cuenta de servicio y rotación ensayada; mapeo definitivo JSM/campos;
 reconciliación Jira y causalidad entre sistemas; conflictos de orden/concurrencia en el proveedor;
-schemas descriptivos completos; carga/fault injection prolongadas; auth por usuario si la instalación
+metadatos exhaustivos de campos/payloads de proveedor; carga/fault injection prolongadas; auth por usuario si la instalación
 lo necesita; límites/alertas de ingreso en el proxy; backup/PITR y RPO/RTO de la instalación real;
 registro privado/digests, escaneo completo y firma/SBOM de imagen; aceptación de K8s/ECS si se ofrecen.
 Las migraciones, credenciales de servicio, probes y retención ya están implementados; esto no cierra esos gates.
 Por ahora las revisiones y auditorías son append-only mediante API, no un almacén legal inmutable.
-Para PostgreSQL remoto, usar verify-full con CA/nombre adecuados; require cifra pero no verifica la identidad del servidor.
+La aplicación no ofrece parámetros propios de CA/SSL de PostgreSQL en esta versión. No suponer
+que `DB_*` configura `verify-full`: el operador debe evaluar y validar el transporte real antes de
+usar una DB remota. Si la política exige TLS verificable, debe resolverse explícitamente antes de desplegar.

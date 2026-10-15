@@ -13,7 +13,7 @@ import shutil
 ROOT_FILES = (".gitignore", ".dockerignore", ".env.example", "Dockerfile", "compose.yaml", "compose.dev.yaml",
               "pyproject.toml", "uv.lock", "README.md", "CONTRIBUTING.md", "SECURITY.md", "use-cases.json",
               ".github/workflows/ci.yml")
-STUDIO_FILES = ("compose.studio.yaml", ".env.studio.example", "docs/studio.md",
+STUDIO_FILES = ("compose.studio.yaml", ".env.studio.example", "docs/studio.md", "docs/technical-reference.md",
                 "frontend/package.json", "frontend/package-lock.json", "frontend/tsconfig.json",
                 "frontend/index.html", "frontend/Dockerfile", "frontend/.dockerignore",
                 "frontend/src/main.tsx", "frontend/src/Canvas.tsx", "frontend/src/Forms.tsx",
@@ -23,6 +23,7 @@ STUDIO_FILES += ("frontend/src/ActionLibrary.tsx", "frontend/src/ActionLibrary.t
 STUDIO_FILES += ("frontend/src/Forms.test.tsx",)
 STUDIO_FILES += ("frontend/src/Access.tsx", "frontend/src/Access.test.tsx")
 STUDIO_FILES += ("frontend/src/ActionHelp.tsx", "frontend/src/ActionHelp.test.tsx")
+STUDIO_FILES += tuple("deploy/env/" + name + ".env.example" for name in ("api", "worker", "migrate", "studio"))
 PUBLIC_TOOLS = ("local_config.py", "init_installation.py", "selftest.py", "smoke_container.py", "e2e_live.py", "export_source.py", "studio_server.py")
 PUBLIC_TOOLS += ("studio_access.py",)
 PUBLIC_TOOLS += ("smoke_studio.py",)

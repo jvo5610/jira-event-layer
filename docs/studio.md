@@ -2,6 +2,12 @@
 
 Consola opcional del motor `automation/v1`. Usa la misma API, reglas y worker que cualquier otro cliente. No crea tenants ni bases, no descubre infraestructura y no obtiene secretos desde proveedores cloud. Docker, Kubernetes, ECS, una VM o un proceso local son decisiones del operador.
 
+El backend tiene una única API para gestión y webhooks. Studio apunta a esa API;
+el operador puede restringir sus rutas de gestión mediante proxy/WAF sin desplegar otro receptor.
+Para ejecutar Studio como servicio independiente, partir de
+[deploy/env/studio.env.example](../deploy/env/studio.env.example). El archivo
+[.env.studio.example](../.env.studio.example) es para el empaquetado Compose, no para inyectarlo entero en el proceso.
+
 ## Contrato de ejecución
 
 El navegador consume `/api` en su propio origen. El gateway reenvía esas solicitudes al backend configurado, agrega su token del lado servidor y sirve los assets compilados. No se envían el token configurado del backend ni credenciales Jira/Bitbucket al navegador. La sección Accesos permite ingresar un administrador y muestra las nuevas credenciales una sola vez a ese administrador. Cambiar la configuración requiere reiniciar el gateway, **no recompilar la imagen**. No existe una configuración incorporada del entorno actual.
