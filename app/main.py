@@ -13,7 +13,7 @@ from psycopg_pool import PoolTimeout
 from starlette.concurrency import run_in_threadpool
 
 from app.config import Settings
-from app.catalog import discover
+from app.catalog import SAMPLE_LIMIT, VISITS_PER_EVENT, discover
 from app.dsl import Rule, RuleError, match, parse_rule
 from app.store import Conflict, Store, principal
 
@@ -176,8 +176,11 @@ def create_app(settings=None, store=None):
 
     @app.get("/v1/catalog/fields", dependencies=[Depends(admin)])
     def catalog_fields(request: Request, source: str = Query(max_length=100), event_type: str = Query(max_length=100)):
-        rows = request.app.state.store.query("WITH recent AS MATERIALIZED (SELECT id,payload,received_at FROM events WHERE source=%s AND event_type=%s AND payload_redacted_at IS NULL ORDER BY received_at DESC,id DESC LIMIT 100), ranked AS (SELECT *,row_number() OVER (PARTITION BY coalesce(payload#>>'{issue,fields,issuetype,id}','') ORDER BY received_at DESC,id DESC) AS rank FROM recent) SELECT payload FROM ranked ORDER BY rank,received_at DESC,id DESC LIMIT 20", (source, event_type))
-        return {"sample_count": len(rows), "sample_limit": 20, "candidate_limit":100, "sampling":"recent issue-type diversity", "fields": discover(row["payload"] for row in rows), "notice": "Observed fields, not a complete provider schema. Values are sampled only for non-personal metadata."}
+        rows = request.app.state.store.query("WITH recent AS MATERIALIZED (SELECT id,payload,received_at FROM events WHERE source=%s AND event_type=%s AND payload_redacted_at IS NULL ORDER BY received_at DESC,id DESC LIMIT %s), ranked AS (SELECT *,row_number() OVER (PARTITION BY coalesce(payload#>>'{issue,fields,issuetype,id}','') ORDER BY received_at DESC,id DESC) AS rank FROM recent) SELECT payload FROM ranked ORDER BY rank,received_at DESC,id DESC", (source, event_type, SAMPLE_LIMIT))
+        return {"sample_count": len(rows), "sample_limit": SAMPLE_LIMIT, "candidate_limit": SAMPLE_LIMIT,
+                "sampling": "latest events, issue-type interleaved", "fields": discover(row["payload"] for row in rows),
+                "limits": {"fields": 500, "visits_per_event": VISITS_PER_EVENT, "depth": 16, "array_items": 3},
+                "notice": "Observed fields, not a complete provider schema. Previews prefer non-empty values; sensitive fields are withheld and text is truncated. Objects/lists show structure only."}
 
     @app.post("/v1/rules/validate", dependencies=[Depends(admin)], openapi_extra=YAML_BODY)
     async def validate_yaml(request: Request, targets: bool = True):

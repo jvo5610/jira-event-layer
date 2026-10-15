@@ -46,7 +46,41 @@ export type Suggestion = {
   types: string[];
   values?: any[];
   origin?: string;
+  example_state?: "present" | "empty" | "protected";
+  example?: string | number | boolean;
+  example_kind?: "value" | "object" | "array";
+  example_count?: number;
+  example_truncated?: boolean;
 };
+export function SuggestionDetails({ suggestion: s }: { suggestion: Suggestion }) {
+  const typeNames: Record<string, string> = {
+    string: t("Texto"), number: t("Número"), boolean: t("Booleano"),
+    object: t("Objeto"), array: t("Lista"), null: t("Sin valor observado"),
+  };
+  const concreteTypes = s.types.filter((type) => type !== "null");
+  const types = concreteTypes.length ? concreteTypes : s.types;
+  let preview = t("Sin ejemplo disponible");
+  if (s.example_state === "empty") preview = t("Sin datos en la muestra");
+  if (s.example_state === "protected") preview = t("Valor protegido");
+  if (s.example_state === "present") {
+    const value = s.example_kind === "object"
+      ? t("Objeto con {count} campos", { count: s.example_count ?? 0 })
+      : s.example_kind === "array"
+        ? t("Lista con {count} elementos", { count: s.example_count ?? 0 })
+        : String(s.example ?? "") + (s.example_truncated ? "…" : "");
+    preview = t("Ejemplo: {value}", { value });
+  }
+  return (
+    <>
+      <small className="data-option-path">{s.path}</small>
+      <small className="data-option-types">
+        {s.origin ?? types.map((type) => typeNames[type] ?? type).join(" · ")}
+        {!s.origin && concreteTypes.length > 0 && s.types.includes("null") && t(" · puede venir vacío")}
+      </small>
+      {!s.origin && <small className="data-option-example">{preview}</small>}
+    </>
+  );
+}
 export function JsonInput({
   value,
   onChange,
@@ -153,9 +187,7 @@ export function PathInput({
               }}
             >
               <span>{describePath(s.path)}</span>
-              <small>
-                {s.path} · {s.origin ?? s.types.join(" · ")}
-              </small>
+              <SuggestionDetails suggestion={s} />
             </button>
           ))}
           {!matches.length && (

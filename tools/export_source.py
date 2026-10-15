@@ -20,6 +20,7 @@ STUDIO_FILES = ("compose.studio.yaml", ".env.studio.example", "docs/studio.md",
                 "frontend/src/model.ts", "frontend/src/model.test.ts", "frontend/src/style.css")
 STUDIO_FILES += ("frontend/src/i18n.ts", "frontend/src/i18n.test.ts")
 STUDIO_FILES += ("frontend/src/ActionLibrary.tsx", "frontend/src/ActionLibrary.test.tsx")
+STUDIO_FILES += ("frontend/src/Forms.test.tsx",)
 PUBLIC_TOOLS = ("local_config.py", "init_installation.py", "selftest.py", "smoke_container.py", "e2e_live.py", "export_source.py", "studio_server.py")
 SUFFIXES = {".py", ".sql", ".yaml", ".json"}
 

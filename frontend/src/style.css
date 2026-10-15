@@ -1000,6 +1000,22 @@ main {
   overflow: auto;
   margin-top: 4px;
 }
+.data-option .data-option-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.data-option .data-option-types {
+  color: #95889f;
+  font-size: 10px;
+}
+.data-option .data-option-example {
+  color: #655275;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .picker-head {
   font-weight: 600;
   display: flex;

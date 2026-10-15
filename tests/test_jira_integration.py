@@ -119,7 +119,10 @@ def test_guard_false_stops_following_actions(env):
     ingest(client)
     worker.tick()
     run = client.get("/v1/runs").json()[0]
-    assert run["status"] == "succeeded" and run["external_result"]["guard_matched"] is False
+    assert run["status"] == "succeeded"
+    detail = client.get(f'/v1/runs/{run["id"]}')
+    assert detail.status_code == 200
+    assert detail.json()["external_result"]["guard_matched"] is False
     assert not worker.tick()
     assert store.query("SELECT count(*) n FROM jira_write_attempts")[0]["n"] == 0
 

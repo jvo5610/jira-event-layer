@@ -985,7 +985,7 @@ function App() {
                             {t("Sobre") + " "}
                             {sampleCount}{" "}
                             {t(
-                              "eventos recientes, máximo 20. Los campos faltantes no se inventan.",
+                              "eventos recientes, máximo 100. Los campos faltantes no se inventan.",
                             ) + " "}
                           </p>
                         </div>
