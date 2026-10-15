@@ -7,16 +7,29 @@ import yaml
 
 from app.jira import Jira
 from app.worker import Worker
-from test_integration import activate, env, ingest
+from test_integration import activate, env, ingest as ingest_event, EVENT
 from test_jira import ACTIONS, config, issue, rule_for
+
+
+def ingest(client, key='event-1', payload=EVENT):
+    payload = {**payload, 'changelog': {'items': [{'field': 'status', 'toString': 'Done'}]}}
+    return ingest_event(client, key, payload)
 
 
 def setup(env, actions, handler):
     client, store, settings = env
     cfg = config()
-    for field in ("jira_email", "jira_token", "jira_cloud_id", "allowed_jira_projects"):
+    for field in ("jira_token", "jira_cloud_id"):
         setattr(settings, field, getattr(cfg, field))
+    # Other tests exercise the handshake; these provider fixtures start with a
+    # previously verified credential mapping, as a restarted worker would.
+    store.remember_jira_actor(settings, 'relay-fixture')
     rule = rule_for(actions)
+    rule.when = {'all': [
+        {'path': 'issue.fields.project.key', 'op': 'in', 'value': ['DEMO', 'KAN']},
+        {'some': {'path': 'changelog.items', 'where': {'all': [
+            {'path': 'field', 'op': 'eq', 'value': 'status'},
+            {'path': 'toString', 'op': 'eq', 'value': 'Done'}]}}}]}
     activate(client, yaml.safe_dump(rule.model_dump()))
     return client, store, settings, Worker(store, settings, jira=Jira(settings, httpx.Client(transport=httpx.MockTransport(handler))))
 

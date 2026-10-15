@@ -15,13 +15,14 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.middleware.gzip import GZipMiddleware
 import httpx
 import uvicorn
+from tools.studio_access import attach_access
 
 
 def secret(env, name):
-    direct, filename = env.get(name, ''), env.get(name + '_FILE', '')
-    if direct and filename:
-        raise ValueError(f'Set only {name} or {name}_FILE')
-    value = Path(filename).read_text().rstrip('\r\n') if filename else direct
+    direct, filename = env.get(name), env.get(name + '_FILE', '')
+    value = direct
+    if value is None:
+        value = Path(filename).read_text().rstrip('\r\n') if filename else ''
     if not value or any(ord(c) < 32 or ord(c) > 126 for c in value):
         raise ValueError(f'{name} is required and must contain printable ASCII')
     return value
@@ -110,7 +111,10 @@ def create_app(settings, *, transport=None):
                                      trust_env=False, transport=transport,
                                      limits=httpx.Limits(max_connections=50, max_keepalive_connections=10)) as client:
             app.state.client = client
-            yield
+            try:
+                yield
+            finally:
+                app.state.clear_admin_sessions()
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.add_middleware(GZipMiddleware, minimum_size=512, compresslevel=5)
@@ -126,7 +130,7 @@ def create_app(settings, *, transport=None):
             response = JSONResponse({'detail': 'Request origin is not allowed'}, status_code=403)
         elif settings.auth_mode == 'basic' and not authorized(request.headers.get('authorization', ''), settings):
             response = JSONResponse({'detail': 'Authentication required'}, status_code=401,
-                                    headers={'WWW-Authenticate': 'Basic realm="Automation", charset="UTF-8"'})
+                                    headers={'WWW-Authenticate': 'Basic realm="jira-relay-studio", charset="UTF-8"'})
         else:
             response = await call_next(request)
         response.headers['Cache-Control'] = ('public, max-age=31536000, immutable'
@@ -156,9 +160,13 @@ def create_app(settings, *, transport=None):
     async def runtime_config():
         return {'backend_url': settings.backend_url, 'api_path': '/api', 'auth_mode': settings.auth_mode}
 
+    attach_access(app, settings)
+
     @app.api_route('/api/{path:path}', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'])
     async def proxy(path: str, request: Request):
         route = '/' + path
+        if route.startswith('/v1/auth/') and not (route == '/v1/auth/me' and request.method == 'GET'):
+            return JSONResponse({'detail': 'Use the administrator access session'}, status_code=403)
         if (not (route.startswith('/v1/') or route in {'/metrics', '/readyz', '/healthz'})
                 or any(p in {'.', '..'} for p in path.split('/')) or '\\' in path):
             return JSONResponse({'detail': 'Not found'}, status_code=404)
@@ -168,12 +176,12 @@ def create_app(settings, *, transport=None):
             size = int(request.headers.get('content-length', '0'))
         except ValueError:
             return JSONResponse({'detail': 'Invalid content length'}, status_code=400)
-        if size < 0 or size > 1048576:
+        if size < 0 or size > 10485760:
             return JSONResponse({'detail': 'Body exceeds the configured limit'}, status_code=413)
         body = bytearray()
         async for chunk in request.stream():
             body.extend(chunk)
-            if len(body) > 1048576:
+            if len(body) > 10485760:
                 return JSONResponse({'detail': 'Body exceeds the configured limit'}, status_code=413)
         headers = {'Authorization': 'Bearer ' + settings.backend_token,
                    'Content-Type': request.headers.get('content-type', 'application/json')}
@@ -183,10 +191,13 @@ def create_app(settings, *, transport=None):
         url = settings.backend_url + route + ('?' + query if query else '')
         try:
             async with request.app.state.client.stream(request.method, url, headers=headers, content=bytes(body)) as result:
+                if result.status_code == 401:
+                    # A backend credential failure must not reopen the browser's Basic login dialog.
+                    return JSONResponse({'detail': 'GUI backend credential is invalid or expired'}, status_code=502)
                 content = bytearray()
                 async for chunk in result.aiter_bytes():
                     content.extend(chunk)
-                    if len(content) > 8388608:
+                    if len(content) > 33554432:
                         return JSONResponse({'detail': 'Backend response exceeds the configured limit'}, status_code=502)
                 return Response(bytes(content), status_code=result.status_code,
                                 media_type=result.headers.get('content-type', 'application/json'))

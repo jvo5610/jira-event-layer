@@ -1,10 +1,11 @@
 import json
+import yaml
 from types import SimpleNamespace
 
 import httpx
 
 from app.worker import Bitbucket, Worker
-from test_integration import env, activate, ingest
+from test_integration import env, activate, ingest, YAML, EVENT
 
 
 def test_pipeline_receives_durable_prior_results_not_webhook_injection(env):
@@ -29,8 +30,10 @@ actions:
       PRIOR_STATE: '${_steps["0"].state}'
       PRIOR_RESULT: '${_steps["0"].result}'
 '''
-    activate(client, text)
-    event = ingest(client, payload={'issue': {'key': 'KAN-10'}, '_steps': {'0': {'state': 'forged', 'result': 'forged'}}})
+    spec = yaml.safe_load(text)
+    spec['when'] = yaml.safe_load(YAML)['when']
+    activate(client, yaml.safe_dump(spec))
+    event = ingest(client, payload={**EVENT, '_steps': {'0': {'state': 'forged', 'result': 'forged'}}})
     writes = []
 
     def provider(request):
@@ -75,12 +78,15 @@ def test_pipeline_dispatch_uses_the_same_trusted_context_without_infrastructure(
                          'repository': 'jira-event-layer-lab', 'branch': 'main',
                          'pipeline': 'setup-new-repository',
                          'variables': {'CREATED_KEY': '${_steps["0"].key}'}}]}
+    spec['when'] = yaml.safe_load(YAML)['when']
     class Store:
         def query(self, sql, args):
             if 'SELECT v.spec' in sql:
                 return [{'spec': spec, 'payload': {'issue': {'key': 'KAN-10'}, '_steps': {'0': {'key': 'FORGED-1'}}}}]
             assert args == ('run-1', 1)
             return [{'step': 0, 'detail': {'result': {'key': 'KAN-13'}}}]
+        def exclude_event(self, event_id):
+            return None
     bodies, states = [], []
     def dispatch(method, action, **kwargs):
         bodies.append(kwargs['body'])

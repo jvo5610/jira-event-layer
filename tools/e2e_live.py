@@ -33,7 +33,17 @@ def rule_yaml(spec):
 
 
 def required(name):
-    value = os.getenv(name, "")
+    value = os.getenv(name)
+    filename = os.getenv(name + "_FILE")
+    if value is None and filename is not None:
+        try:
+            with Path(filename).open("rb") as handle:
+                raw = handle.read(16385)
+            if len(raw) > 16384:
+                raise ValueError()
+            value = raw.decode("utf-8").rstrip("\r\n")
+        except (OSError, UnicodeError, ValueError):
+            raise RuntimeError(f"Unable to read bounded UTF-8 secret {name}_FILE") from None
     if not value:
         raise RuntimeError(f"Set {name} explicitly for live E2E")
     return value
@@ -83,7 +93,7 @@ def run(args):
         raise RuntimeError("Live acceptance creates remote resources. Pass --allow-remote-writes explicitly")
     stamp = uuid.uuid4().hex[:12]
     name = "automation-live-" + stamp
-    config = {"TENANT_ID": name, "ADMIN_TOKEN": secrets.token_urlsafe(48), "API_SURFACE": "management"}
+    config = {"TENANT_ID": name, "ADMIN_BOOTSTRAP_TOKEN": secrets.token_urlsafe(48)}
     if args.provider in {"bitbucket", "all"}:
         for key in ("BITBUCKET_ACCOUNT_EMAIL", "BITBUCKET_API_TOKEN"):
             config[key] = required(key)
@@ -94,13 +104,13 @@ def run(args):
         pipeline = args.bitbucket_pipeline
         branch = args.bitbucket_branch
     if args.provider in {"jira", "all"}:
-        for key in ("JIRA_ACCOUNT_EMAIL", "JIRA_API_TOKEN", "JIRA_CLOUD_ID"):
+        for key in ("JIRA_API_TOKEN", "JIRA_CLOUD_ID"):
             config[key] = required(key)
         project = args.jira_project
         issue_type = args.jira_issue_type_id
         status = args.jira_target_status_id
         link_type = args.jira_link_type_id
-        config.update(ALLOWED_JIRA_PROJECTS=project, JIRA_REQUIRED_LABEL="automation-managed", JIRA_MAX_DAILY_WRITES="20")
+        config.update(JIRA_MAX_DAILY_WRITES="20")
     report = {"test_id": name, "candidate_image": args.image, "ingress": "authenticated API event, not a native Jira webhook",
               "provider_calls": "real", "cases": [], "remote_resources_deleted": False}
     evidence = Path(args.output)
@@ -120,7 +130,7 @@ def run(args):
             command("docker", "run", "-d", "--name", db, "--network", name,
                     "--env-file", envfile("db.env", {"POSTGRES_PASSWORD": db_password, "POSTGRES_DB": "automation_test"}), "postgres:17")
             eventually(lambda: command("docker", "exec", db, "pg_isready", "-U", "postgres", "-d", "automation_test", check=False).returncode == 0)
-            config["DATABASE_URL"] = f"postgresql://postgres:{db_password}@{db}/automation_test"
+            config.update(DB_HOST=db, DB_PORT="5432", DB_NAME="automation_test", DB_USER="postgres", DB_PASSWORD=db_password)
             env_path = envfile("runtime.env", config)
             command("docker", "run", "--rm", "--network", name, "--env-file", env_path,
                     args.image, "python", "-m", "app.migrate")
@@ -134,8 +144,15 @@ def run(args):
                 command(*invocation, args.image, *(["python", "-m", "app.worker"] if worker_mode else []))
             port = command("docker", "port", api, "8080/tcp").stdout.decode().strip().rsplit(":", 1)[1]
             with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=15,
-                              headers={"Authorization": "Bearer " + config["ADMIN_TOKEN"]}, trust_env=False) as client:
+                              headers={"Authorization": "Bearer " + config["ADMIN_BOOTSTRAP_TOKEN"]}, trust_env=False) as client:
                 eventually(lambda: client.get("/readyz").status_code == 200)
+                issued = client.post("/v1/auth/tokens", json={"name": "live-acceptance",
+                    "permissions": ["api:read", "rules:write", "flows:operate"], "expires_in_seconds": 3600})
+                issued.raise_for_status()
+                delegated = issued.json()
+                client.headers["Authorization"] = "Bearer " + delegated["token"]
+                report["execution_credential"] = "delegated_without_auth_admin"
+                report["credential_id"] = delegated["id"]
                 if args.provider in {"bitbucket", "all"}:
                     workspace, repository = repo.split("/")
                     action = {"type": "bitbucket.pipeline", "workspace": workspace, "repository": repository,
@@ -165,14 +182,14 @@ def run(args):
                         {"type": "jira.issue.create", "project": project, "issue_type_id": issue_type, "fields": fields},
                         {"type": "jira.comment.add", "issue": source, "text": {"value": "Prueba del flujo: comentario publicado por el motor."}},
                         {"type": "jira.issue.edit", "issue": source, "fields": {"summary": {"value": "[Prueba de automatizacion] Ticket original actualizado"}}},
-                        {"type": "jira.issue.transition", "issue": source, "to_status_id": status},
+                        {"type": "jira.issue.transition", "issue": source, "from_status_id": args.jira_initial_status_id, "to_status_id": status},
                         {"type": "jira.issue.clone", "source": source, "project": project, "issue_type_id": issue_type,
                          "copy_fields": ["summary", "description", "labels"], "fields": {"summary": {"value": "[Prueba de automatizacion] Copia del ticket original"}}},
                         {"type": "jira.issue.link", "inward": source, "outward": {"path": '_steps["4"].key'}, "link_type_id": link_type},
                         {"type": "jira.issue.get", "issue": source, "require": {"path": "fields.status.id", "op": "eq", "value": status}},
                         # Transition the clone only after checking the original's current status.
-                        {"type": "jira.issue.transition", "issue": {"path": '_steps["4"].key'}, "to_status_id": status},
-                        {"type": "jira.issue.transition", "issue": {"path": '_steps["4"].key'}, "to_status_id": status},
+                        {"type": "jira.issue.transition", "issue": {"path": '_steps["4"].key'}, "from_status_id": args.jira_initial_status_id, "to_status_id": status},
+                        {"type": "jira.issue.transition", "issue": {"path": '_steps["4"].key'}, "from_status_id": args.jira_initial_status_id, "to_status_id": status},
                         {"type": "jira.issue.get", "issue": {"path": '_steps["4"].key'},
                          "require": {"path": "fields.status.id", "op": "eq", "value": status}}
                     ]
@@ -181,7 +198,7 @@ def run(args):
                                if row["detail"].get("result") is not None}
                     created, cloned = results["0"]["key"], results["4"]["key"]
                     with httpx.Client(base_url=f"https://api.atlassian.com/ex/jira/{config['JIRA_CLOUD_ID']}/rest/api/3/",
-                                      auth=(config["JIRA_ACCOUNT_EMAIL"], config["JIRA_API_TOKEN"]), timeout=20) as provider:
+                                      headers={"Authorization": "Bearer " + config["JIRA_API_TOKEN"]}, timeout=20) as provider:
                         original = provider.get("issue/" + created, params={"fields": "summary,status,labels,issuelinks", "properties": "automation.operation"})
                         original.raise_for_status()
                         current = original.json()["fields"]
@@ -191,7 +208,7 @@ def run(args):
                         copy.raise_for_status()
                     assert current["summary"] == "[Prueba de automatizacion] Ticket original actualizado"
                     assert current["status"]["id"] == status
-                    expected_labels = {"automation-managed", "automation-prueba", "automation-flujo-" + flow_name}
+                    expected_labels = {"automation-prueba", "automation-flujo-" + flow_name}
                     assert set(current["labels"]) == set(copy.json()["fields"]["labels"]) == expected_labels
                     provenance = original.json()["properties"]["automation.operation"]
                     assert provenance["rule_name"] == flow_name and provenance["run_id"] == run["id"]
@@ -210,7 +227,7 @@ def run(args):
                     stopped_results = [row["detail"]["result"] for row in stopped["log"] if row["detail"].get("result")]
                     assert len(stopped_results) == 1 and stopped_results[0]["stop"]
                     with httpx.Client(base_url=f"https://api.atlassian.com/ex/jira/{config['JIRA_CLOUD_ID']}/rest/api/3/",
-                                      auth=(config["JIRA_ACCOUNT_EMAIL"], config["JIRA_API_TOKEN"]), timeout=20) as provider:
+                                      headers={"Authorization": "Bearer " + config["JIRA_API_TOKEN"]}, timeout=20) as provider:
                         after = provider.get("issue/" + created + "/comment")
                         after.raise_for_status()
                     assert after.json()["total"] == comments.json()["total"]
@@ -255,19 +272,22 @@ def parse_args(argv=None):
     parser.add_argument("--jira-project", help="Project key")
     parser.add_argument("--jira-issue-type-id")
     parser.add_argument("--jira-target-status-id")
+    parser.add_argument("--jira-initial-status-id", help="Verified initial status ID of new issues in the target project/type")
     parser.add_argument("--jira-link-type-id")
     args = parser.parse_args(argv)
     selected = []
     if args.provider in {"bitbucket", "all"}:
         selected += ["bitbucket_repository", "bitbucket_branch", "bitbucket_pipeline"]
     if args.provider in {"jira", "all"}:
-        selected += ["jira_project", "jira_issue_type_id", "jira_target_status_id", "jira_link_type_id"]
+        selected += ["jira_project", "jira_issue_type_id", "jira_initial_status_id", "jira_target_status_id", "jira_link_type_id"]
     for field in selected:
         value = getattr(args, field)
         if not value or not value.strip():
             parser.error("required argument: --" + field.replace("_", "-"))
     if args.provider in {"bitbucket", "all"} and (args.bitbucket_repository.count("/") != 1 or not all(args.bitbucket_repository.split("/"))):
         parser.error("--bitbucket-repository must be workspace/repository")
+    if args.provider in {'jira', 'all'} and args.jira_initial_status_id == args.jira_target_status_id:
+        parser.error('--jira-initial-status-id and --jira-target-status-id must differ')
     return args
 
 

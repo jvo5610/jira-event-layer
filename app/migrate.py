@@ -8,7 +8,7 @@ from pathlib import Path
 import psycopg
 from psycopg.rows import dict_row
 
-from app.config import secret, tenant_id
+from app.config import database_config, database_options, tenant_id
 from app.schema import fingerprint
 
 MIGRATIONS = Path(__file__).with_name("migrations")
@@ -86,7 +86,7 @@ def check_schema(conn, tenant=None):
 
 def migrate(url, tenant):
     available = scripts()
-    with psycopg.connect(url, row_factory=dict_row, connect_timeout=10, options=OPTIONS) as conn:
+    with psycopg.connect(**database_options(url), row_factory=dict_row, connect_timeout=10, options=OPTIONS) as conn:
         conn.execute("SELECT pg_advisory_xact_lock(9824321)")
         if has_history(conn):
             applied = history(conn)
@@ -111,7 +111,7 @@ def migrate(url, tenant):
 
 def status(url, tenant):
     available = scripts()
-    with psycopg.connect(url, row_factory=dict_row, connect_timeout=10, options=OPTIONS) as conn:
+    with psycopg.connect(**database_options(url), row_factory=dict_row, connect_timeout=10, options=OPTIONS) as conn:
         conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
         applied = history(conn) if has_history(conn) else []
         validate_history(applied, available)
@@ -128,7 +128,7 @@ def main():
     parser.add_argument("--status", action="store_true", help="Read-only validation and list of applied/pending migrations")
     args = parser.parse_args()
     try:
-        url, tenant = secret("DATABASE_URL", required=True), tenant_id()
+        url, tenant = database_config(), tenant_id()
         if args.status:
             for row in status(url, tenant):
                 print(f"{row['status']:7} {row['name']}")

@@ -1,6 +1,15 @@
 import { dump, load } from "js-yaml";
+import { t } from "./i18n";
 
 export type Obj = Record<string, any>;
+export function eventExclusionMessage(event: Obj): string | null {
+  const reason = event.execution_blocked_reason ?? event.last_error;
+  if (["ignored_service_actor", "ignored_jira_actor"].includes(reason))
+    return t("Ignorado: lo generó una cuenta del servicio. No puede disparar flujos ni ejecutarse manualmente.");
+  if (reason === "held_actor_unknown")
+    return t("Retenido: no se pudo identificar quién generó el evento. No se ejecutará por seguridad.");
+  return null;
+}
 export type Rule = {
   apiVersion: string;
   kind: string;
@@ -27,7 +36,7 @@ export const labels: Record<string, string> = {
   issue_type_id: "ID del tipo de ticket",
   parent: "Ticket padre",
   to_status_id: "ID del estado destino",
-  from_status_id: "ID del estado de origen (opcional)",
+  from_status_id: "ID del estado de origen",
   text: "Comentario",
   inward: "Ticket de entrada",
   outward: "Ticket de salida",
@@ -128,22 +137,22 @@ export function relativeSuggestions<T extends { path: string }>(
         all.findIndex((other) => other.path === item.path) === index,
     );
 }
+export const actionOutputKeys: Record<string, string[]> = {
+  "jira.issue.create": ["key", "operation_id"],
+  "jira.issue.clone": ["key", "operation_id"],
+  "jira.issue.get": ["key", "fields", "guard_matched"],
+  "jira.issue.edit": ["key", "updated_fields", "no_change"],
+  "jira.issue.transition": ["key", "status_id", "no_change"],
+  "jira.comment.add": ["key", "comment_id", "operation_id"],
+  "jira.issue.link": ["inward", "outward", "link_type_id"],
+  "bitbucket.pipeline": ["state", "result"],
+};
 export function previousOutputs(
   actions: Obj[],
   index: number,
 ): { path: string; types: string[]; origin: string }[] {
-  const outputKeys: Record<string, string[]> = {
-    "jira.issue.create": ["key", "operation_id"],
-    "jira.issue.clone": ["key", "operation_id"],
-    "jira.issue.get": ["key", "fields", "guard_matched"],
-    "jira.issue.edit": ["key", "updated_fields", "no_change"],
-    "jira.issue.transition": ["key", "status_id", "no_change"],
-    "jira.comment.add": ["key", "comment_id", "operation_id"],
-    "jira.issue.link": ["inward", "outward", "link_type_id"],
-    "bitbucket.pipeline": ["state", "result"],
-  };
   return actions.slice(0, index).flatMap((a, i) =>
-    (outputKeys[a.type] ?? []).map((key) => ({
+    (actionOutputKeys[a.type] ?? []).map((key) => ({
       path: `_steps["${i}"].${key}`,
       types: [],
       origin: `${i + 1} · ${actionLabels[a.type]}`,
@@ -191,11 +200,16 @@ export async function api(
   } catch {
     result = text;
   }
-  if (!response.ok)
-    throw new Error(
-      typeof result?.detail === "string"
-        ? result.detail
-        : JSON.stringify(result?.detail ?? result),
-    );
+  if (!response.ok) {
+    const detail = typeof result?.detail === "string" ? result.detail : JSON.stringify(result?.detail ?? result);
+    const code = detail.split(":")[0];
+    const safetyMessages: Record<string, string> = {
+      unsafe_write_scope: "Acotá el proyecto o ticket con eq/in en todas las ramas del filtro antes de activar.",
+      unsafe_change_scope: "En issue_updated, filtrá el campo cambiado y su valor anterior o nuevo dentro del mismo some.where.",
+      unsafe_transition: "Cada cambio de estado necesita IDs de origen y destino distintos.",
+      unsafe_action_target: "Usá una clave de ticket explícita, issue.key o la clave de un paso Jira anterior como destino.",
+    };
+    throw new Error(safetyMessages[code] ? `${t(safetyMessages[code])} [${code}]` : detail);
+  }
   return result;
 }

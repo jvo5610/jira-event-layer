@@ -81,18 +81,16 @@ class Jira:
 
     def request(self, method, path, body=None):
         s = self.settings
-        if not s.jira_token or not s.jira_email:
+        if not s.jira_token:
             raise RuleError("jira_credentials_missing")
         try:
             cloud_id = str(UUID(s.jira_cloud_id))
         except ValueError:
             raise RuleError("jira_cloud_id_invalid") from None
-        if not s.jira_required_label or not s.allowed_jira_projects:
-            raise RuleError("jira_safety_configuration_missing")
         # Scoped API tokens use Atlassian's gateway; user input never controls the host.
         return bounded_request(self.client, method, f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/{path}",
-                                   auth=(s.jira_email, s.jira_token), json=body,
-                                   headers={"Accept": "application/json"})
+                                   json=body,
+                                   headers={"Accept": "application/json", "Authorization": f"Bearer {s.jira_token}"})
 
     def read(self, path):
         try:
@@ -116,26 +114,25 @@ class Jira:
     def issue_key(self, value):
         if not isinstance(value, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{1,30}-[1-9][0-9]*", value):
             raise RuleError("jira_issue_key_invalid")
-        if value.rsplit("-", 1)[0] not in self.settings.allowed_jira_projects:
-            raise RuleError("jira_project_not_allowed")
         return value
+
+    def service_account(self):
+        from app.actors import account_id
+        profile = self.read('myself')
+        identifier = account_id(profile.get('accountId'))
+        if identifier is None or profile.get('active') is False:
+            raise RuleError('jira_service_identity_invalid')
+        return identifier
 
     def issue(self, value):
         key = self.issue_key(value)
-        fields = sorted(set(self.settings.allowed_jira_fields) | {"project", "status", "labels", "parent"})
-        if any(not re.fullmatch(r"[a-zA-Z_][a-zA-Z_0-9]*", f) for f in fields):
-            raise RuleError("jira_field_configuration_invalid")
-        issue = self.read(f"issue/{key}?fields={','.join(fields)}")
+        issue = self.read(f"issue/{key}?fields=*all")
         actual = issue.get("fields", {})
-        if issue.get("key") != key or actual.get("project", {}).get("key") not in self.settings.allowed_jira_projects:
+        if issue.get("key") != key or actual.get("project", {}).get("key") != key.rsplit("-", 1)[0]:
             raise RuleError("jira_issue_scope_mismatch")
-        if self.settings.jira_required_label not in actual.get("labels", []):
-            raise RuleError("jira_managed_label_required")
         return issue
 
     def fields(self, bindings, payload):
-        if not set(bindings) <= set(self.settings.allowed_jira_fields):
-            raise RuleError("jira_field_not_allowed")
         fields = {key: bind(binding, payload) for key, binding in bindings.items()}
         self.validate_fields(fields)
         return fields
@@ -184,12 +181,8 @@ class Jira:
         operation_id = identity.operation_id
         kind = action.type
         if kind in {"jira.issue.create", "jira.issue.clone"}:
-            if action.project not in self.settings.allowed_jira_projects:
-                raise RuleError("jira_project_not_allowed")
             fields = {}
             if kind == "jira.issue.clone":
-                if not set(action.copy_fields) <= set(self.settings.allowed_jira_fields):
-                    raise RuleError("jira_field_not_allowed")
                 source = self.issue(bind(action.source, payload))
                 fields = {k: source["fields"][k] for k in action.copy_fields if k in source["fields"]}
                 if "labels" in fields:
@@ -199,7 +192,7 @@ class Jira:
             if any(x.startswith(FLOW_LABEL_PREFIX) for x in supplied.get("labels", [])):
                 raise RuleError("jira_flow_labels_reserved")
             fields.update(supplied)
-            fields["labels"] = sorted(set(fields.get("labels", [])) | {self.settings.jira_required_label, identity.flow_label})
+            fields["labels"] = sorted(set(fields.get("labels", [])) | {identity.flow_label})
             self.validate_fields(fields)
             if not fields.get("summary"):
                 raise RuleError("jira_summary_required")
@@ -265,8 +258,6 @@ class Jira:
     def check_protected_labels(self, fields, issue):
         if "labels" not in fields:
             return
-        if self.settings.jira_required_label not in fields["labels"]:
-            raise RuleError("jira_managed_label_cannot_be_removed")
         existing = {x for x in issue["fields"].get("labels", []) if x.startswith(FLOW_LABEL_PREFIX)}
         requested = {x for x in fields["labels"] if x.startswith(FLOW_LABEL_PREFIX)}
         if requested != existing:

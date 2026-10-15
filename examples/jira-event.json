@@ -1,5 +1,6 @@
 {
   "webhookEvent": "jira:issue_updated",
+  "user": {"accountId": "human-fixture"},
   "issue": {"key": "KAN-1", "fields": {
     "project": {"key": "KAN"}, "summary": "Solicitud de repositorio",
     "labels": ["automation-lab-repository"], "status": {"name": "Done"}

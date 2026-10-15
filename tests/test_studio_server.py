@@ -65,11 +65,28 @@ def test_static_paths_cache_and_body_limit(gateway):
     assert client.get('/assets/not-found.js').status_code == 404
     assert client.get('/%2e%2e/private').status_code == 404
     assert client.get('/.env').status_code == 404
-    assert client.post('/api/v1/events', content='x' * 1048577).status_code == 413
+    assert client.post('/api/v1/events', content='x' * 10485761).status_code == 413
     assert client.post('/api/v1/events', headers={'Content-Length': 'bad'}).status_code == 400
     assert client.get('/assets/app.js').headers['cache-control'].startswith('public,')
     assert client.get('/').headers['cache-control'] == 'no-store'
     assert not calls
+
+
+def test_gateway_accepts_ten_mib_with_and_without_content_length(gateway):
+    client, calls = gateway
+    data = b'x' * 10485760
+    assert client.post('/api/v1/events', content=data).status_code == 200
+    assert client.post('/api/v1/events', content=iter([data])).status_code == 200
+    assert len(calls) == 2 and all(len(call.content) == len(data) for call in calls)
+    assert client.post('/api/v1/events', content=iter([data, b'x'])).status_code == 413
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize('size,status', [(10485760, 200), (33554433, 502)])
+def test_gateway_large_event_response_is_bounded(config, size, status):
+    with TestClient(create_app(config, transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, content=b'x' * size))), base_url=config.public_origin) as client:
+        assert client.get('/api/v1/events').status_code == status
 
 
 @pytest.mark.parametrize('backend,origin', [
@@ -154,8 +171,10 @@ def test_secret_files_and_default_authenticated_mode(tmp_path):
     assert settings.backend_token == 'file-token'
     assert settings.password == 'file-login-password-long'
     assert settings.backend_token not in repr(settings) and settings.password not in repr(settings)
-    with pytest.raises(ValueError):
-        Settings.from_env(env | {'STUDIO_BACKEND_TOKEN':'ambiguous'})
+    assert Settings.from_env(env | {'STUDIO_BACKEND_TOKEN':'direct-token',
+                                   'STUDIO_BACKEND_TOKEN_FILE':str(tmp_path / 'missing')}).backend_token == 'direct-token'
+    with pytest.raises(ValueError, match='required'):
+        Settings.from_env(env | {'STUDIO_BACKEND_TOKEN':''})
 
 
 def test_product_has_no_deployment_provider_dependencies():

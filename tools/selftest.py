@@ -28,7 +28,7 @@ def main():
     root = Path(__file__).resolve().parents[1]
     os.chdir(root)
     name = "automation-selftest-" + uuid.uuid4().hex[:12]
-    password = secrets.token_urlsafe(40)
+    password = secrets.token_urlsafe(40) + "@:/% ?'\\[]"
     image = "automation-api:selftest-" + uuid.uuid4().hex[:12]
     with tempfile.TemporaryDirectory(prefix=name) as directory:
         config = Path(directory) / "postgres.env"
@@ -46,7 +46,8 @@ def main():
                 raise RuntimeError("Disposable PostgreSQL did not become ready")
             port = run(["docker", "port", name, "5432/tcp"], quiet=True).stdout.decode().strip().rsplit(":", 1)[1]
             env = {k: v for k, v in os.environ.items() if k in {"PATH", "HOME", "TMPDIR", "SYSTEMROOT", "SSL_CERT_FILE", "SSL_CERT_DIR"}}
-            env["TEST_DATABASE_URL"] = f"postgresql://automation:{password}@127.0.0.1:{port}/automation_test"
+            env.update(TEST_DB_HOST="127.0.0.1", TEST_DB_PORT=port, TEST_DB_NAME="automation_test",
+                       TEST_DB_USER="automation", TEST_DB_PASSWORD=password)
             run(["uv", "sync", "--frozen"], env=env)
             run(["uv", "run", "--frozen", "pytest", "-q"], env=env)
             if args.full:

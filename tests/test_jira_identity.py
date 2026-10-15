@@ -29,11 +29,11 @@ def adapter(labels=None):
     def handle(request):
         if request.method == "GET":
             return httpx.Response(200, json={"key": "DEMO-1", "fields": {"project": {"key": "DEMO"},
-                "summary": "Original", "labels": labels if labels is not None else ["automation-managed"], "status": {"id": "1"}}})
+                "summary": "Original", "labels": labels if labels is not None else [], "status": {"id": "1"}}})
         writes.append(json.loads(request.content))
         return httpx.Response(204) if request.method == "PUT" else httpx.Response(201, json={"key": "DEMO-2"})
-    cfg = Settings("", "", "", jira_email="test@example.com", jira_token="test-only",
-                   jira_cloud_id="11111111-1111-4111-8111-111111111111", allowed_jira_projects=("DEMO",))
+    cfg = Settings("", "", "", jira_token="test-only",
+                   jira_cloud_id="11111111-1111-4111-8111-111111111111")
     return Jira(cfg, httpx.Client(transport=httpx.MockTransport(handle))), writes
 
 
@@ -41,7 +41,7 @@ def test_create_merges_business_labels_and_ignores_forged_event_identity():
     api, writes = adapter()
     item = action(fields={"summary": {"value": "Repositorio"}, "labels": {"value": ["equipo-plataforma", "equipo-plataforma"]}})
     api.execute(item, {"rule_name": "forged", "_identity": {"rule_version": 999}}, identity(), lambda: None)
-    assert writes[0]["fields"]["labels"] == ["automation-flujo-crear-repositorio", "automation-managed", "equipo-plataforma"]
+    assert writes[0]["fields"]["labels"] == ["automation-flujo-crear-repositorio", "equipo-plataforma"]
     assert writes[0]["properties"][0]["value"] == identity().provenance()
 
 
@@ -51,7 +51,7 @@ def test_clone_replaces_only_origin_flow_label_preserving_business_labels():
     assert writes[0]["fields"]["labels"] == ["automation-flujo-crear-repositorio", "automation-managed", "automation-prueba", "soporte"]
 
 
-@pytest.mark.parametrize("labels", [["automation-flujo-forged"], ["x" + str(i) for i in range(29)]])
+@pytest.mark.parametrize("labels", [["automation-flujo-forged"], ["x" + str(i) for i in range(30)]])
 def test_reserved_or_overflow_labels_fail_before_write(labels):
     api, writes = adapter()
     with pytest.raises(RuleError):

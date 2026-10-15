@@ -3,6 +3,7 @@ import hmac
 import json
 from contextlib import asynccontextmanager
 from uuid import UUID
+from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -12,9 +13,13 @@ from psycopg import OperationalError
 from psycopg_pool import PoolTimeout
 from starlette.concurrency import run_in_threadpool
 
-from app.config import Settings
+from app.config import Settings, secret
+from app.auth import required_permission
+from app.tokens import TokenManager, DatabaseAuthenticator
 from app.catalog import SAMPLE_LIMIT, VISITS_PER_EVENT, discover
 from app.dsl import Rule, RuleError, match, parse_rule
+from app.safety import validate_safety
+from app.actors import exclusion_reason
 from app.store import Conflict, Store, principal
 
 YAML_BODY = {"requestBody": {"required": True, "content": {
@@ -55,13 +60,26 @@ class Reconciliation(BaseModel):
     external_uuid: UUID
 
 
-def create_app(settings=None, store=None):
+class TokenCreation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=100, pattern=r"\S")
+    permissions: list[Literal["api:read", "rules:write", "flows:operate", "auth:admin"]] = Field(min_length=1, max_length=4)
+    expires_in_seconds: int = Field(ge=60, le=31536000, strict=True)
+
+
+def create_app(settings=None, store=None, authenticator=None, *, webhooks=False):
     @asynccontextmanager
     async def lifespan(app):
-        app.state.settings = settings or Settings.from_env()
-        app.state.store = store or Store(app.state.settings.database_url, app.state.settings.tenant)
+        app.state.settings = settings or Settings.from_env("webhooks" if webhooks else "api")
+        app.state.store = store or Store(app.state.settings.database, app.state.settings.tenant)
         await run_in_threadpool(app.state.store.open)
         try:
+            cfg = app.state.settings
+            app.state.tokens = TokenManager(app.state.store, cfg.auth_rotation_ttl)
+            if authenticator is None and not webhooks:
+                supplier = lambda: cfg.admin_bootstrap_token if cfg.admin_bootstrap_token is not None else secret("ADMIN_BOOTSTRAP_TOKEN")
+                await run_in_threadpool(app.state.tokens.bootstrap, supplier, cfg.webhook_secret)
+            app.state.authenticator = authenticator or DatabaseAuthenticator(app.state.tokens)
             yield
         finally:
             await run_in_threadpool(app.state.store.close)
@@ -71,21 +89,12 @@ def create_app(settings=None, store=None):
                   description="Single-tenant deterministic automation engine. Separate API, workers and PostgreSQL; no cloud dependency.")
     bearer = HTTPBearer(auto_error=False)
 
-    def admin(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
-        cfg = request.app.state.settings
-        role = None
-        for candidate in ("admin", "reader", "writer", "operator"):
-            token = getattr(cfg, candidate + "_token")
-            if token and credentials and hmac.compare_digest(credentials.credentials.encode(), token.encode()):
-                role = candidate
-        if role is None:
+    def authorize(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
+        identity = request.state.identity
+        if identity is None:
             raise HTTPException(401, "Valid API bearer token required", headers={"WWW-Authenticate": "Bearer"})
-        path = request.scope["route"].path
-        readonly = request.method == "GET" or path in {"/v1/evaluate", "/v1/compare", "/v1/rules/validate"}
-        permitted = (role == "admin" or readonly or (role == "writer" and path == "/v1/rules")
-                     or (role == "operator" and path in {"/v1/rules/{name}/activate", "/v1/rules/{name}/disable",
-                         "/v1/events", "/v1/events/{event_id}/execute", "/v1/runs/{run_id}/reconcile"}))
-        if not permitted:
+        permission = required_permission(request.method, request.scope["route"].path)
+        if permission is not None and permission not in identity.permissions:
             raise HTTPException(403, "Credential does not permit this operation")
 
     @app.middleware("http")
@@ -93,16 +102,13 @@ def create_app(settings=None, store=None):
         cfg = request.app.state.settings
         path = request.url.path
         management = path.startswith("/v1/") or path in {"/metrics", "/openapi.json", "/docs", "/redoc"}
-        if ((cfg.api_surface == "webhooks" and management)
-                or (cfg.api_surface == "management" and path.startswith("/webhooks/"))):
-            return JSONResponse({"detail": "Not found"}, status_code=404)
         # Set audit attribution in the async context before sync handlers are dispatched.
-        credential = request.headers.get("Authorization", "")
-        actor = "anonymous"
-        for role in ("admin", "reader", "writer", "operator"):
-            token = getattr(cfg, role + "_token")
-            if token and hmac.compare_digest(credential.encode(), ("Bearer " + token).encode()):
-                actor = role
+        try:
+            identity = await request.app.state.authenticator.authenticate(request.headers.get("Authorization", "")) if management and not webhooks else None
+        except (OperationalError, PoolTimeout):
+            return JSONResponse({"detail": "Authentication persistence unavailable"}, status_code=503)
+        request.state.identity = identity
+        actor = identity.subject if identity else "anonymous"
         # Stream-bound before parsing JSON; prevents unbounded chunked request bodies too.
         data = bytearray()
         async for chunk in request.stream():
@@ -145,9 +151,36 @@ def create_app(settings=None, store=None):
         request.app.state.store.query("SELECT 1")
         return {"status": "ready"}
 
-    @app.get("/openapi.json", dependencies=[Depends(admin)], include_in_schema=False)
+    @app.get("/openapi.json", dependencies=[Depends(authorize)], include_in_schema=False)
     def openapi():
         return app.openapi()
+
+    @app.get("/v1/auth/me", dependencies=[Depends(authorize)])
+    def current_identity(request: Request):
+        identity = request.state.identity
+        return {"subject": identity.subject, "permissions": sorted(identity.permissions),
+                "token_id": identity.token_id, "pending": identity.pending,
+                "pending_administrator": identity.pending_administrator}
+
+    @app.get("/v1/auth/tokens", dependencies=[Depends(authorize)])
+    def list_tokens(request: Request, limit: int = Query(100, ge=1, le=100), offset: int = Query(0, ge=0, le=1000000)):
+        return request.app.state.tokens.list(request.state.identity, limit, offset)
+
+    @app.post("/v1/auth/tokens", status_code=201, dependencies=[Depends(authorize)])
+    def create_token(body: TokenCreation, request: Request):
+        return request.app.state.tokens.create(request.state.identity, body.name, body.permissions, body.expires_in_seconds)
+
+    @app.post("/v1/auth/tokens/self/rotate", dependencies=[Depends(authorize)])
+    def rotate_token(request: Request):
+        return request.app.state.tokens.rotate(request.state.identity)
+
+    @app.post("/v1/auth/tokens/self/confirm", dependencies=[Depends(authorize)])
+    def confirm_token(request: Request):
+        return request.app.state.tokens.confirm(request.state.identity)
+
+    @app.post("/v1/auth/tokens/{token_id}/revoke", dependencies=[Depends(authorize)])
+    def revoke_token(token_id: UUID, request: Request):
+        return request.app.state.tokens.revoke(request.state.identity, token_id)
 
     def checked(text, request):
         rule, digest = parse_rule(text)
@@ -157,24 +190,24 @@ def create_app(settings=None, store=None):
             raise RuleError(str(exc)) from None
         return rule, digest
 
-    @app.get("/v1/schema", dependencies=[Depends(admin)])
+    @app.get("/v1/schema", dependencies=[Depends(authorize)])
     def schema():
         return Rule.model_json_schema()
 
-    @app.get("/v1/catalog", dependencies=[Depends(admin)])
+    @app.get("/v1/catalog", dependencies=[Depends(authorize)])
     def catalog(request: Request):
         cfg = request.app.state.settings
         return {
             "schema": Rule.model_json_schema(),
             "events": request.app.state.store.query("SELECT DISTINCT source,event_type FROM (SELECT source,event_type FROM events ORDER BY received_at DESC LIMIT 200) recent ORDER BY source,event_type"),
             "connectors": {
-                "jira": {"configured": True if cfg.jira_token and cfg.jira_email and cfg.jira_cloud_id else None if cfg.allowed_jira_projects else False, "projects": cfg.allowed_jira_projects, "fields": cfg.allowed_jira_fields, "required_label": cfg.jira_required_label},
+                "jira": {"configured": bool(cfg.jira_token and cfg.jira_cloud_id)},
                 "bitbucket": {"configured": True if cfg.bitbucket_token and cfg.bitbucket_email else None if cfg.allowed_repositories else False, "repositories": cfg.allowed_repositories},
             },
             "limits": {"actions": 10, "filter_depth": 12, "filter_nodes": 128, "filter_children": 32},
         }
 
-    @app.get("/v1/catalog/fields", dependencies=[Depends(admin)])
+    @app.get("/v1/catalog/fields", dependencies=[Depends(authorize)])
     def catalog_fields(request: Request, source: str = Query(max_length=100), event_type: str = Query(max_length=100)):
         rows = request.app.state.store.query("WITH recent AS MATERIALIZED (SELECT id,payload,received_at FROM events WHERE source=%s AND event_type=%s AND payload_redacted_at IS NULL ORDER BY received_at DESC,id DESC LIMIT %s), ranked AS (SELECT *,row_number() OVER (PARTITION BY coalesce(payload#>>'{issue,fields,issuetype,id}','') ORDER BY received_at DESC,id DESC) AS rank FROM recent) SELECT payload FROM ranked ORDER BY rank,received_at DESC,id DESC", (source, event_type, SAMPLE_LIMIT))
         return {"sample_count": len(rows), "sample_limit": SAMPLE_LIMIT, "candidate_limit": SAMPLE_LIMIT,
@@ -182,16 +215,17 @@ def create_app(settings=None, store=None):
                 "limits": {"fields": 500, "visits_per_event": VISITS_PER_EVENT, "depth": 16, "array_items": 3},
                 "notice": "Observed fields, not a complete provider schema. Previews prefer non-empty values; sensitive fields are withheld and text is truncated. Objects/lists show structure only."}
 
-    @app.post("/v1/rules/validate", dependencies=[Depends(admin)], openapi_extra=YAML_BODY)
+    @app.post("/v1/rules/validate", dependencies=[Depends(authorize)], openapi_extra=YAML_BODY)
     async def validate_yaml(request: Request, targets: bool = True):
         try:
             text = (await request.body()).decode("utf-8")
         except UnicodeDecodeError:
             raise RuleError("YAML must be UTF-8") from None
         rule, digest = checked(text, request) if targets else parse_rule(text)
-        return {"valid": True, "sha256": digest, "spec": rule.model_dump(), "targets_checked": targets}
+        validate_safety(rule)
+        return {"valid": True, "sha256": digest, "spec": rule.model_dump(), "targets_checked": targets, "safety_checked": True}
 
-    @app.post("/v1/rules", status_code=201, dependencies=[Depends(admin)], openapi_extra=YAML_BODY)
+    @app.post("/v1/rules", status_code=201, dependencies=[Depends(authorize)], openapi_extra=YAML_BODY)
     async def save_yaml(request: Request):
         try:
             text = (await request.body()).decode("utf-8")
@@ -200,22 +234,22 @@ def create_app(settings=None, store=None):
         rule, digest = checked(text, request)
         return await run_in_threadpool(request.app.state.store.save_rule, rule, digest, text)
 
-    @app.get("/v1/rules", dependencies=[Depends(admin)])
+    @app.get("/v1/rules", dependencies=[Depends(authorize)])
     def rules(request: Request):
         return request.app.state.store.query("SELECT r.name,r.active_version,max(v.version) latest_version FROM rules r JOIN rule_versions v ON v.rule_name=r.name GROUP BY r.name ORDER BY r.name LIMIT 1000")
 
-    @app.get("/v1/rules/{name}/versions", dependencies=[Depends(admin)])
+    @app.get("/v1/rules/{name}/versions", dependencies=[Depends(authorize)])
     def versions(name: str, request: Request):
         return request.app.state.store.query("SELECT rule_name,version,sha256,created_at FROM rule_versions WHERE rule_name=%s ORDER BY version DESC LIMIT 100", (name,))
 
-    @app.get("/v1/rules/{name}/versions/{version}", dependencies=[Depends(admin)])
+    @app.get("/v1/rules/{name}/versions/{version}", dependencies=[Depends(authorize)])
     def version(name: str, version: int, request: Request):
         rows = request.app.state.store.query("SELECT * FROM rule_versions WHERE rule_name=%s AND version=%s", (name, version))
         if not rows:
             raise KeyError(name)
         return rows[0]
 
-    @app.post("/v1/rules/{name}/activate", dependencies=[Depends(admin)])
+    @app.post("/v1/rules/{name}/activate", dependencies=[Depends(authorize)])
     def activate(name: str, body: Activation, request: Request):
         rows = request.app.state.store.query("SELECT spec FROM rule_versions WHERE rule_name=%s AND version=%s", (name, body.version))
         if not rows:
@@ -226,7 +260,7 @@ def create_app(settings=None, store=None):
             raise RuleError(str(exc)) from None
         return request.app.state.store.activate(name, body.version, body.sha256)
 
-    @app.post("/v1/rules/{name}/disable", dependencies=[Depends(admin)])
+    @app.post("/v1/rules/{name}/disable", dependencies=[Depends(authorize)])
     def disable(name: str, request: Request):
         return request.app.state.store.disable(name)
 
@@ -238,7 +272,7 @@ def create_app(settings=None, store=None):
             raise Conflict("Selected event payload has been redacted")
         return rows
 
-    @app.post("/v1/evaluate", dependencies=[Depends(admin)])
+    @app.post("/v1/evaluate", dependencies=[Depends(authorize)])
     def evaluate(body: Evaluation, request: Request):
         rule, digest = checked(body.yaml, request)
         rows = sample(body.event_ids, request)
@@ -247,7 +281,7 @@ def create_app(settings=None, store=None):
         return {"sha256": digest, "executed": False, "results": [
             {"event_id": row["id"], "trace": match(rule, row["source"], row["event_type"], row["payload"])} for row in rows]}
 
-    @app.post("/v1/compare", dependencies=[Depends(admin)])
+    @app.post("/v1/compare", dependencies=[Depends(authorize)])
     def compare(body: Comparison, request: Request):
         left, ld = checked(body.left_yaml, request)
         right, rd = checked(body.right_yaml, request)
@@ -276,11 +310,9 @@ def create_app(settings=None, store=None):
                 raise ValueError()
         except (ValueError, KeyError, TypeError, RecursionError):
             raise HTTPException(400, "Invalid Jira event") from None
-        user = payload.get("user")
-        suppress = isinstance(user, dict) and user.get("accountId") in cfg.jira_ignored_actor_ids
-        return await run_in_threadpool(request.app.state.store.ingest, cfg.tenant, "jira", delivery, event_type, payload, raw, suppress)
+        return await run_in_threadpool(request.app.state.store.ingest, cfg.tenant, "jira", delivery, event_type, payload, raw)
 
-    @app.post("/v1/events", status_code=202, dependencies=[Depends(admin)])
+    @app.post("/v1/events", status_code=202, dependencies=[Depends(authorize)])
     async def ingest(request: Request):
         raw = await request.body()
         delivery = request.headers.get("Idempotency-Key", "")
@@ -297,37 +329,39 @@ def create_app(settings=None, store=None):
         return await run_in_threadpool(request.app.state.store.ingest, request.app.state.settings.tenant,
                                        body["source"], delivery, body["event_type"], body["payload"], raw)
 
-    @app.get("/v1/events", dependencies=[Depends(admin)])
+    @app.get("/v1/events", dependencies=[Depends(authorize)])
     def events(request: Request, limit: int = Query(50, ge=1, le=100), source: str | None = Query(None, max_length=100), event_type: str | None = Query(None, max_length=100), before: UUID | None = None):
         return request.app.state.store.query("SELECT id,source,event_type,delivery_id,received_at,processed_at,attempts,last_error,payload#>>'{issue,key}' AS issue_key,payload#>>'{issue,fields,issuetype,name}' AS issue_type,left(payload#>>'{issue,fields,summary}',200) AS issue_summary FROM events WHERE (%s::text IS NULL OR source=%s) AND (%s::text IS NULL OR event_type=%s) AND (%s::uuid IS NULL OR (received_at,id)<(SELECT received_at,id FROM events WHERE id=%s)) ORDER BY received_at DESC,id DESC LIMIT %s", (source, source, event_type, event_type, before, before, limit))
 
-    @app.get("/v1/events/{event_id}", dependencies=[Depends(admin)])
+    @app.get("/v1/events/{event_id}", dependencies=[Depends(authorize)])
     def event(event_id: UUID, request: Request):
-        rows = request.app.state.store.query("SELECT id,source,event_type,payload,received_at,processed_at,payload_redacted_at FROM events WHERE id=%s", (event_id,))
+        rows = request.app.state.store.query("SELECT id,source,event_type,payload,received_at,processed_at,payload_redacted_at,last_error FROM events WHERE id=%s", (event_id,))
         if not rows:
             raise KeyError(str(event_id))
-        return {**rows[0], "evaluations": request.app.state.store.query("SELECT * FROM evaluations WHERE event_id=%s", (event_id,))}
+        with request.app.state.store.pool.connection() as conn:
+            blocked = exclusion_reason(conn, rows[0])
+        return {**rows[0], 'execution_blocked_reason': blocked, "evaluations": request.app.state.store.query("SELECT * FROM evaluations WHERE event_id=%s", (event_id,))}
 
-    @app.post("/v1/events/{event_id}/execute", dependencies=[Depends(admin)])
+    @app.post("/v1/events/{event_id}/execute", dependencies=[Depends(authorize)])
     def execute(event_id: UUID, request: Request):
         return request.app.state.store.execute(event_id)
 
-    @app.get("/v1/runs", dependencies=[Depends(admin)])
+    @app.get("/v1/runs", dependencies=[Depends(authorize)])
     def runs(request: Request, limit: int = Query(50, ge=1, le=100), before: UUID | None = None):
         return request.app.state.store.query("SELECT id,event_id,rule_name,version,status,step,attempts,next_at,external_uuid,last_error,created_at,updated_at FROM runs WHERE (%s::uuid IS NULL OR (created_at,id)<(SELECT created_at,id FROM runs WHERE id=%s)) ORDER BY created_at DESC,id DESC LIMIT %s", (before, before, limit))
 
-    @app.get("/v1/runs/{run_id}", dependencies=[Depends(admin)])
+    @app.get("/v1/runs/{run_id}", dependencies=[Depends(authorize)])
     def run(run_id: UUID, request: Request):
         rows = request.app.state.store.query("SELECT * FROM runs WHERE id=%s", (run_id,))
         if not rows:
             raise KeyError(str(run_id))
         return {**rows[0], "log": request.app.state.store.query("SELECT * FROM run_log WHERE run_id=%s ORDER BY id", (run_id,))}
 
-    @app.get("/v1/audit", dependencies=[Depends(admin)])
+    @app.get("/v1/audit", dependencies=[Depends(authorize)])
     def audit(request: Request):
         return request.app.state.store.query("SELECT * FROM audit ORDER BY id DESC LIMIT 100")
 
-    @app.post("/v1/runs/{run_id}/reconcile", dependencies=[Depends(admin)])
+    @app.post("/v1/runs/{run_id}/reconcile", dependencies=[Depends(authorize)])
     def reconcile(run_id: UUID, body: Reconciliation, request: Request):
         # Operator supplies the observed pipeline UUID. This never retries the POST.
         from app.worker import Bitbucket
@@ -356,7 +390,7 @@ def create_app(settings=None, store=None):
             store.audit(conn, "attach_existing_pipeline", str(run_id), {"external_uuid": external_uuid})
         return updated
 
-    @app.get("/metrics", dependencies=[Depends(admin)], response_class=PlainTextResponse)
+    @app.get("/metrics", dependencies=[Depends(authorize)], response_class=PlainTextResponse)
     def metrics(request: Request):
         rows = request.app.state.store.query("SELECT status,count(*) count FROM runs GROUP BY status")
         gauges = request.app.state.store.query("SELECT (SELECT count(*) FROM worker_heartbeats WHERE last_seen>now()-interval '180 seconds') workers, COALESCE((SELECT extract(epoch FROM now()-min(created_at)) FROM runs WHERE status='pending'),0) oldest_pending")[0]
@@ -364,6 +398,10 @@ def create_app(settings=None, store=None):
                 + "# TYPE automation_workers_healthy gauge\n" + f'automation_workers_healthy {gauges["workers"]}\n'
                 + "# TYPE automation_oldest_pending_seconds gauge\n" + f'automation_oldest_pending_seconds {gauges["oldest_pending"]}\n')
 
+    # Entrypoints have disjoint route tables, not environment-selected exposure.
+    app.router.routes[:] = [route for route in app.router.routes
+        if route.path in {"/healthz", "/readyz"}
+        or (route.path.startswith("/webhooks/") if webhooks else not route.path.startswith("/webhooks/"))]
     return app
 
 

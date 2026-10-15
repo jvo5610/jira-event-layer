@@ -21,7 +21,11 @@ STUDIO_FILES = ("compose.studio.yaml", ".env.studio.example", "docs/studio.md",
 STUDIO_FILES += ("frontend/src/i18n.ts", "frontend/src/i18n.test.ts")
 STUDIO_FILES += ("frontend/src/ActionLibrary.tsx", "frontend/src/ActionLibrary.test.tsx")
 STUDIO_FILES += ("frontend/src/Forms.test.tsx",)
+STUDIO_FILES += ("frontend/src/Access.tsx", "frontend/src/Access.test.tsx")
+STUDIO_FILES += ("frontend/src/ActionHelp.tsx", "frontend/src/ActionHelp.test.tsx")
 PUBLIC_TOOLS = ("local_config.py", "init_installation.py", "selftest.py", "smoke_container.py", "e2e_live.py", "export_source.py", "studio_server.py")
+PUBLIC_TOOLS += ("studio_access.py",)
+PUBLIC_TOOLS += ("smoke_studio.py",)
 SUFFIXES = {".py", ".sql", ".yaml", ".json"}
 
 

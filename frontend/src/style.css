@@ -1344,6 +1344,33 @@ td button {
   margin: 20px auto;
   font-size: 11px;
 }
+.access-page { display: grid; gap: 22px; }
+.access-unlock { max-width: 620px; }
+.access-page h2, .access-page h3 { margin-top: 0; }
+.access-page p { line-height: 1.6; }
+.access-page form { display: grid; gap: 18px; }
+.access-page label:not(.access-check) { display: grid; gap: 8px; }
+.access-page fieldset { border: 1px solid var(--border, #e4e1ed); border-radius: 12px; padding: 16px; }
+.access-check { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; flex-wrap: wrap; }
+.access-check input { width: 18px; height: 18px; flex: 0 0 18px; }
+.access-check code { font-size: 11px; color: #767084; }
+.access-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
+.access-actions, .access-toolbar, .access-duration { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.access-actions { justify-content: space-between; }
+.access-toolbar p { flex: 1; }
+.access-duration > * { flex: 1; min-width: 100px; }
+.access-message { padding: 14px 18px; border-radius: 10px; background: #eef8f1; color: #275139; }
+.access-message.error, .access-warning { color: #8b322d; }
+.access-message.error { background: #fff0ee; }
+.access-secret { border: 2px solid #a789e3; background: #faf7ff; }
+.access-secret textarea { font-family: ui-monospace, monospace; overflow-wrap: anywhere; width: 100%; margin-bottom: 14px; }
+.access-table-scroll { overflow-x: auto; }
+.access-list table { width: 100%; border-collapse: collapse; }
+.access-list th, .access-list td { text-align: left; vertical-align: top; padding: 16px 12px; border-bottom: 1px solid #eeeaf4; }
+.access-list td small { display: block; color: #827a91; font-size: 11px; margin-top: 7px; overflow-wrap: anywhere; }
+.access-list td code { font-size: 11px; display: inline-block; }
+.access-list .access-actions { margin-top: 18px; }
+@media (max-width: 950px) { .access-columns { grid-template-columns: 1fr; } }
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -1661,3 +1688,9 @@ td button {
     width: 100%;
   }
 }
+.action-help { margin: 12px 0 20px; border: 1px solid var(--border, #e5e0ed); border-radius: 12px; padding: 12px 16px; }
+.action-help summary { cursor: pointer; font-weight: 600; }
+.action-help summary:focus-visible { outline: 2px solid #9b6deb; outline-offset: 4px; }
+.action-help-content { line-height: 1.55; font-size: 14px; }
+.action-help-content ul { padding-left: 22px; }
+.action-help-content pre { white-space: pre-wrap; overflow-wrap: anywhere; }

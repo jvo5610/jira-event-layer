@@ -1,5 +1,4 @@
 """Real PostgreSQL migration tests, always in a newly created disposable database."""
-import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -7,11 +6,12 @@ from pathlib import Path
 import psycopg
 import pytest
 from psycopg import sql
-from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from psycopg.conninfo import make_conninfo
 from psycopg.rows import dict_row
 
 import app.migrate as migration
 from app.schema import fingerprint
+from test_integration import _test_database_config
 
 BASELINE = Path("app/migrations/001_initial.sql").read_text()
 
@@ -25,11 +25,7 @@ def release(tmp_path, monkeypatch):
 
 @pytest.fixture
 def database():
-    source = os.getenv("TEST_DATABASE_URL")
-    if not source:
-        pytest.skip("TEST_DATABASE_URL required for real Postgres tests")
-    if conninfo_to_dict(source).get("dbname") != "automation_test":
-        raise RuntimeError("Migration tests require a dedicated automation_test database")
+    source = make_conninfo(**_test_database_config())
     name = "automation_migration_" + uuid.uuid4().hex
     with psycopg.connect(source, autocommit=True) as admin:
         admin.execute(sql.SQL("CREATE DATABASE {} TEMPLATE template0").format(sql.Identifier(name)))

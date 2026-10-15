@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   actionDefinitions,
   api,
+  eventExclusionMessage,
   bindingMode,
   bindingValue,
   initialAction,
@@ -12,6 +13,16 @@ import {
 } from "./model";
 
 describe("Full v1 editor contract", () => {
+  it("distinguishes ignored service events from unknown actors and ordinary errors", () => {
+    expect(eventExclusionMessage({execution_blocked_reason: "ignored_service_actor"})).toContain("cuenta del servicio");
+    expect(eventExclusionMessage({last_error: "held_actor_unknown"})).toContain("Retenido");
+    expect(eventExclusionMessage({last_error: "ordinary-error"})).toBeNull();
+  });
+  it("explains unsafe activation errors without exposing the raw rule", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({detail: "unsafe_write_scope: raw details"}), {status: 422})));
+    await expect(api("/v1/rules/demo/activate", "POST", {})).rejects.toThrow("Acotá el proyecto o ticket");
+    vi.unstubAllGlobals();
+  });
   it("round-trips every variation without dropping fields or typed values", () => {
     const rule = parseRule(
       readFileSync("../examples/all-v1-variations.yaml", "utf8"),

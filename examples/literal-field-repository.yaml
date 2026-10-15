@@ -10,6 +10,12 @@ when:
     - {path: issue.fields.labels, op: contains, value: automation-lab-repository}
     - path: 'issue.fields["repository.name"][0].value'
       op: exists
+    - some:
+        path: changelog.items
+        where:
+          all:
+            - {path: field, op: eq, value: status}
+            - {path: toString, op: eq, value: Done}
 actions:
   - type: bitbucket.pipeline
     workspace: jvidelaolmos

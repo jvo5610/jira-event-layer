@@ -1,3 +1,10 @@
+x-database: &database
+  DB_HOST: postgres
+  DB_PORT: 5432
+  DB_NAME: automation
+  DB_USER: automation
+  DB_PASSWORD: local-test-only
+
 services:
   postgres:
     image: postgres:17
@@ -15,7 +22,7 @@ services:
     build: .
     env_file: .env
     environment:
-      DATABASE_URL: postgresql://automation:local-test-only@postgres:5432/automation
+      <<: *database
       TENANT_ID: development
     ports: ["127.0.0.1:8088:8080"]
     depends_on:
@@ -28,7 +35,7 @@ services:
       test: [CMD, python, -m, app.health, worker]
     env_file: .env
     environment:
-      DATABASE_URL: postgresql://automation:local-test-only@postgres:5432/automation
+      <<: *database
       TENANT_ID: development
     depends_on:
       postgres: {condition: service_healthy}
@@ -38,7 +45,7 @@ services:
     command: ["python", "-m", "app.migrate"]
     healthcheck: {disable: true}
     environment:
-      DATABASE_URL: postgresql://automation:local-test-only@postgres:5432/automation
+      <<: *database
       TENANT_ID: development
     depends_on:
       postgres: {condition: service_healthy}

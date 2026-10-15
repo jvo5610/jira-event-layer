@@ -14,6 +14,8 @@ from app.store import Store
 from app.jira import AmbiguousWrite, ExecutionIdentity, Jira, PreflightRetry, WriteRateLimited
 from app.health import worker_id
 from app.transport import bounded_request
+from app.safety import validate_safety
+from app.actors import credential_key, exclusion_reason
 
 log = logging.getLogger("automation.worker")
 
@@ -43,6 +45,24 @@ class Worker:
         self.settings = settings
         self.connector = connector or Bitbucket(settings)
         self.jira = jira or Jira(settings)
+
+    def ensure_service_identity(self):
+        if not getattr(self.settings, 'jira_token', ''):
+            return
+        key = credential_key(self.settings)
+        if getattr(self, '_identity_key', None) == key:
+            return
+        identifier = self.store.jira_actor_for_credential(self.settings)
+        if identifier is None:
+            identifier = self.jira.service_account()
+            self.store.remember_jira_actor(self.settings, identifier)
+        self._identity_key = key
+
+    def check_event_actor(self, conn, run):
+        event = conn.execute('SELECT * FROM events WHERE id=%s', (run['event_id'],)).fetchone()
+        reason = exclusion_reason(conn, event)
+        if reason:
+            raise RuleError(reason)
 
     @staticmethod
     def record(conn, run, status, detail=None):
@@ -77,6 +97,7 @@ class Worker:
 
     def reserve_jira_write(self, run):
         with self.store.pool.connection() as conn:
+            self.check_event_actor(conn, run)
             conn.execute("SELECT pg_advisory_xact_lock(9824322)")
             active = conn.execute("SELECT id FROM runs WHERE id=%s AND lease_token=%s AND lease_until>now() AND status='dispatching' FOR UPDATE", (run["id"], run["lease_token"])).fetchone()
             if not active:
@@ -91,6 +112,7 @@ class Worker:
 
     def reserve_bitbucket_write(self, run):
         with self.store.pool.connection() as conn:
+            self.check_event_actor(conn, run)
             conn.execute("SELECT pg_advisory_xact_lock(9824323)")
             active = conn.execute("SELECT id FROM runs WHERE id=%s AND lease_token=%s AND lease_until>now() AND status='dispatching' FOR UPDATE", (run["id"], run["lease_token"])).fetchone()
             enabled = conn.execute("SELECT active_version FROM rules WHERE name=%s", (run["rule_name"],)).fetchone()
@@ -136,9 +158,27 @@ class Worker:
         run = self.claim()
         if run is None:
             return False
+        if run['status'] != 'waiting':
+            try:
+                self.ensure_service_identity()
+            except (PreflightRetry, RuleError, ValueError, httpx.HTTPError):
+                self.finish(run, 'pending', error='jira_service_identity_unverified', delay=60)
+                return True
+            reason = self.store.exclude_event(run['event_id'])
+            if reason:
+                self.finish(run, 'failed', error=reason)
+                return True
         rows = self.store.query("SELECT v.spec,e.payload FROM rule_versions v JOIN events e ON e.id=%s WHERE v.rule_name=%s AND v.version=%s", (run["event_id"], run["rule_name"], run["version"]))
-        rule = Rule.model_validate(rows[0]["spec"])
-        action = rule.actions[run["step"]]
+        try:
+            rule = Rule.model_validate(rows[0]['spec'])
+            action = rule.actions[run['step']]
+            # Finish observing an already dispatched pipeline; never submit another
+            # write from an unsafe revision. A later step is checked on its next tick.
+            if not (run['status'] == 'waiting' and action.type == 'bitbucket.pipeline'):
+                validate_safety(rule)
+        except (RuleError, ValueError):
+            self.finish(run, 'failed', error='unsafe_rule_execution_blocked')
+            return True
         if action.type.startswith("jira."):
             return self.tick_jira(run, rule, action, rows[0]["payload"])
         polling = run["status"] == "waiting"
@@ -205,7 +245,7 @@ class Worker:
 def main():
     logging.basicConfig(level=logging.INFO)
     settings = Settings.from_env(mode="worker")
-    store = Store(settings.database_url, settings.tenant)
+    store = Store(settings.database, settings.tenant)
     store.open()
     worker = Worker(store, settings)
     stop = threading.Event()
@@ -216,6 +256,10 @@ def main():
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
     try:
+        try:
+            worker.ensure_service_identity()
+        except (PreflightRetry, RuleError, ValueError, httpx.HTTPError):
+            raise SystemExit('Jira service identity could not be verified; GET /myself requires read:jira-user. Check token scopes and connectivity. No actions were dispatched.') from None
         last_heartbeat = 0
         while not stop.is_set():
             try:

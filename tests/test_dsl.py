@@ -70,7 +70,9 @@ def test_schema_advertises_short_bindings():
 
 @pytest.mark.parametrize("example", sorted(Path("examples").glob("*.yaml")))
 def test_all_published_yaml_examples_validate(example):
-    parse_rule(example.read_text())
+    from app.safety import validate_safety
+    rule, _ = parse_rule(example.read_text())
+    validate_safety(rule)
 
 
 def test_complete_v1_catalog_covers_every_operator_and_action():
@@ -102,7 +104,8 @@ def test_literal_field_pipeline_example():
     rule, _ = parse_rule(Path("examples/literal-field-repository.yaml").read_text())
     event = {"issue": {"key": "KAN-8", "fields": {"project": {"key": "KAN"},
              "labels": ["automation-lab-repository"], "summary": "New repository",
-             "repository.name": [{"value": "service-payments"}]}}}
+             "repository.name": [{"value": "service-payments"}]}},
+             'changelog': {'items': [{'field': 'status', 'toString': 'Done'}]}}
     assert match(rule, "jira", "jira:issue_updated", event)["matched"]
     body = render_action(rule.actions[0], event)
     assert {v["key"]: v["value"] for v in body["variables"]}["REPOSITORY_NAME"] == "service-payments"

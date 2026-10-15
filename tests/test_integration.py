@@ -10,7 +10,7 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-from app.config import Settings
+from app.config import Settings, database_config
 from app.main import create_app
 from app.store import Store
 from app.migrate import migrate
@@ -20,23 +20,38 @@ YAML = Path("examples/repository-request.yaml").read_text()
 EVENT = json.loads(Path("examples/jira-event.json").read_text())
 
 
+def _test_database_config():
+    if not os.getenv("TEST_DB_HOST"):
+        pytest.skip("TEST_DB_HOST and separate TEST_DB_* parameters required for real Postgres tests")
+    database = database_config(prefix="TEST_")
+    if database["dbname"] != "automation_test":
+        raise RuntimeError("Tests require a dedicated automation_test database")
+    return database
+
+
 @pytest.fixture
 def env():
-    url = os.getenv("TEST_DATABASE_URL")
-    if not url:
-        pytest.skip("TEST_DATABASE_URL required for real Postgres tests")
-    if url.rsplit("/", 1)[-1] != "automation_test":
-        raise RuntimeError("Tests require a dedicated automation_test database")
-    settings = Settings(url, "a"*40, "b"*40, "lab@example.com", "fake-test-token",
+    database = _test_database_config()
+    settings = Settings(database, "a"*40, "b"*40, "lab@example.com", "fake-test-token",
                         allowed_repositories=("jvidelaolmos/jira-event-layer-lab",),
-                        tenant="test-installation", jira_required_label="automation-lab-managed")
-    migrate(url, settings.tenant)
-    store = Store(url)
+                        tenant="test-installation")
+    migrate(database, settings.tenant)
+    store = Store(database)
+    import psycopg
+    with psycopg.connect(**database) as conn:
+        conn.execute("TRUNCATE auth_tokens,auth_bootstrap_state,service_actor_credentials,service_actors CASCADE")
     with TestClient(create_app(settings, store)) as client:
         with store.pool.connection() as conn:
             conn.execute("TRUNCATE audit,run_log,runs,evaluations,events,rule_versions,rules RESTART IDENTITY CASCADE")
-        client.headers["Authorization"] = "Bearer " + settings.admin_token
+        client.headers["Authorization"] = "Bearer " + settings.admin_bootstrap_token
         yield client, store, settings
+
+
+@pytest.fixture
+def webhook_client(env):
+    _, _, settings = env
+    with TestClient(create_app(settings, webhooks=True)) as client:
+        yield client
 
 
 def activate(client, text=YAML):
@@ -49,6 +64,7 @@ def activate(client, text=YAML):
 
 
 def ingest(client, key="event-1", payload=EVENT):
+    payload = {'user': {'accountId': 'human-fixture'}, **payload}
     response = client.post("/v1/events", headers={"Idempotency-Key": key},
                            json={"source": "jira", "event_type": "jira:issue_updated", "payload": payload})
     assert response.status_code == 202, response.text
@@ -58,8 +74,21 @@ def ingest(client, key="event-1", payload=EVENT):
 def test_auth_and_body_limit(env):
     client, _, _ = env
     assert client.get("/v1/rules", headers={"Authorization": ""}).status_code == 401
-    assert client.post("/v1/rules", content=b"x"*1048577).status_code == 413
+    assert client.post("/v1/rules", content=b"x"*10485761).status_code == 413
     assert client.post("/v1/rules", content="invalid").status_code == 422
+
+
+def test_ten_mib_event_can_be_persisted_and_read(env):
+    client, _, _ = env
+    prefix = '{"source":"jira","event_type":"large-event","payload":{"text":"'
+    suffix = '"}}'
+    body = prefix + 'x' * (10485760 - len(prefix) - len(suffix)) + suffix
+    response = client.post('/v1/events', content=body, headers={'Content-Type': 'application/json',
+        'Idempotency-Key': 'ten-mib-event'})
+    assert response.status_code == 202
+    result = client.get('/v1/events/' + response.json()['event_id'])
+    assert result.status_code == 200
+    assert result.json()['payload']['text'] == 'x' * (10485760 - len(prefix) - len(suffix))
 
 
 def test_yaml_openapi_contract(env):
@@ -124,15 +153,15 @@ def test_concurrent_duplicate_deliveries(env):
     assert len(store.query("SELECT * FROM runs")) == 1
 
 
-def test_signed_jira_webhook(env):
+def test_signed_jira_webhook(env, webhook_client):
     client, _, settings = env
     activate(client)
     raw = json.dumps(EVENT).encode()
     headers = {"X-Atlassian-Webhook-Identifier": "jira-native-1", "X-Hub-Signature": "sha256=" + hmac.new(settings.webhook_secret.encode(), raw, hashlib.sha256).hexdigest()}
-    assert client.post("/webhooks/jira", content=raw).status_code == 401
-    assert client.post("/webhooks/jira", content=raw, headers=headers).status_code == 202
-    assert client.post("/webhooks/jira", content=raw, headers=headers).json()["duplicate"]
-    assert client.post("/webhooks/jira", content=raw+b" ", headers=headers).status_code == 401
+    assert webhook_client.post("/webhooks/jira", content=raw).status_code == 401
+    assert webhook_client.post("/webhooks/jira", content=raw, headers=headers).status_code == 202
+    assert webhook_client.post("/webhooks/jira", content=raw, headers=headers).json()["duplicate"]
+    assert webhook_client.post("/webhooks/jira", content=raw+b" ", headers=headers).status_code == 401
 
 
 def test_disable_prevents_new_matches(env):
@@ -226,7 +255,7 @@ def test_two_workers_claim_once(env):
     assert sum(r is not None for r in claims) == 1
 
 
-def test_literal_field_and_array_paths_reach_pipeline_from_signed_webhook(env):
+def test_literal_field_and_array_paths_reach_pipeline_from_signed_webhook(env, webhook_client):
     client, store, settings = env
     spec = yaml.safe_load(YAML)
     literal = 'issue.fields["repository.name"][0].value'
@@ -238,9 +267,9 @@ def test_literal_field_and_array_paths_reach_pipeline_from_signed_webhook(env):
     raw = json.dumps(payload).encode()
     headers = {"X-Atlassian-Webhook-Identifier": "literal-path-delivery",
                "X-Hub-Signature": "sha256=" + hmac.new(settings.webhook_secret.encode(), raw, hashlib.sha256).hexdigest()}
-    first = client.post("/webhooks/jira", content=raw, headers=headers)
+    first = webhook_client.post("/webhooks/jira", content=raw, headers=headers)
     assert first.status_code == 202 and len(first.json()["runs"]) == 1
-    duplicate = client.post("/webhooks/jira", content=raw, headers=headers)
+    duplicate = webhook_client.post("/webhooks/jira", content=raw, headers=headers)
     assert duplicate.json()["duplicate"]
     calls = []
     def handler(request):
@@ -272,7 +301,6 @@ def test_path_syntax_rejected_before_api_persistence(env, location):
     elif location == "binding":
         spec["actions"][0]["variables"]["DESCRIPTION"] = {"path": "issue.get()"}
     else:
-        settings.allowed_jira_projects = ("DEMO",)
         spec["actions"] = [{"type": "jira.issue.get", "issue": {"value": "DEMO-1"},
                             "require": {"path": '$.fields.status', "op": "exists"}}]
     text = yaml.safe_dump(spec)

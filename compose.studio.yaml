@@ -1,7 +1,7 @@
 # Optional console for an existing backend. No database, tenant or provider defaults.
 services:
   studio:
-    image: ${STUDIO_IMAGE:-automation-studio:1.0.0}
+    image: ${STUDIO_IMAGE:-jira-relay-studio:1.0.0}
     build: {context: ., dockerfile: frontend/Dockerfile}
     user: "10001:10001"
     read_only: true

@@ -2,7 +2,7 @@
 import argparse
 import sys
 
-from app.config import secret, tenant_id
+from app.config import database_config, tenant_id
 from app.store import Store
 
 
@@ -32,7 +32,7 @@ def main():
     args = parser.parse_args()
     store = None
     try:
-        store = Store(secret("DATABASE_URL", required=True), tenant_id())
+        store = Store(database_config(), tenant_id())
         store.open()
         print(redact(store, args.days, args.limit, args.apply))
         return 0

@@ -14,7 +14,7 @@ See [capabilities and production gates](use-cases.json). Not affiliated with Atl
 ## Quick start
 
 For the optional, runtime-configured visual editor, see
-[Automation Studio](docs/studio.md). The same image runs against any configured backend,
+[jira-relay-studio](docs/studio.md). The same image runs against any configured backend,
 independently of Docker, Kubernetes, ECS or other deployment choices. It covers the v1 actions and filters,
 maps observed event fields, and uses the same versioned API and worker.
 
@@ -39,8 +39,8 @@ docker compose -p jira-event-layer-dev -f compose.dev.yaml up -d --build
 curl --fail http://127.0.0.1:8088/readyz
 ```
 
-The generated `.env` contains a private `ADMIN_TOKEN`. Management endpoints require
-`Authorization: Bearer <ADMIN_TOKEN>`; start with `GET /v1/schema` and `GET /openapi.json`.
+The generated `.env` contains a private `ADMIN_BOOTSTRAP_TOKEN`. Management endpoints require
+`Authorization: Bearer <ADMIN_BOOTSTRAP_TOKEN>`; start with `GET /v1/schema` and `GET /openapi.json`.
 Keep tokens out of shell history, commits and rules. Stop development services with
 `docker compose -p jira-event-layer-dev -f compose.dev.yaml down` (database volume is preserved).
 
@@ -78,7 +78,7 @@ Sin --full ejecuta la suite con Postgres real pero omite build/aceptación de co
 
 Para explorar la API local, `python3 tools/local_config.py` genera una configuración de desarrollo
 sin sobrescribir archivos y `docker compose -p automation-dev -f compose.dev.yaml up -d --build` arranca
-los servicios. Usar el ADMIN_TOKEN local para consultar /v1/schema. Esto es desarrollo, no producción.
+los servicios. Usar el ADMIN_BOOTSTRAP_TOKEN local para consultar /v1/schema. Esto es desarrollo, no producción.
 Los destinos de los ejemplos no configuran la instalación. Adaptar proyecto, tipos, estados y
 repositorios a los recursos autorizados del operador. La suite local usa dobles aislados y no llama proveedores.
 
@@ -95,13 +95,13 @@ uv run python tools/e2e_live.py --provider bitbucket --output work/e2e-bitbucket
 
 uv run python tools/e2e_live.py --provider jira --output work/e2e-jira \
   --jira-project KAN --jira-issue-type-id 10003 \
-  --jira-target-status-id 10003 --jira-link-type-id 10000 \
+  --jira-initial-status-id 10000 --jira-target-status-id 10003 --jira-link-type-id 10000 \
   --allow-remote-writes
 ```
 
 Las únicas variables de entorno del proveedor son las conexiones normales:
 BITBUCKET_ACCOUNT_EMAIL/BITBUCKET_API_TOKEN y
-JIRA_ACCOUNT_EMAIL/JIRA_API_TOKEN/JIRA_CLOUD_ID.
+JIRA_API_TOKEN/JIRA_CLOUD_ID. Jira utiliza Bearer con un API token de cuenta de servicio compatible; no requiere email.
 La versión 1 no acepta los nombres anteriores; los tokens también admiten
 BITBUCKET_API_TOKEN_FILE y JIRA_API_TOKEN_FILE.
 Los destinos se pasan explícitamente como argumentos; no se leen variables E2E_* ni TEST_*.
@@ -156,18 +156,82 @@ Admite hasta diez acciones secuenciales por regla. No hay branching de acciones 
 
 Excepto health/ready y el webhook firmado, requiere Authorization: Bearer TOKEN.
 OpenAPI en /openapi.json también está autenticado. /docs y /redoc no se publican;
-una UI separada puede cargar el contrato autenticado. Permisos de servicio:
+una UI separada puede cargar el contrato autenticado.
 
-| Credencial | Permisos |
-|---|---|
-| ADMIN_TOKEN | Todas las operaciones |
-| READER_TOKEN | Consultar, validar, evaluar y comparar sin ejecutar |
-| WRITER_TOKEN | Lo anterior y guardar borradores; no activar ni ejecutar |
-| OPERATOR_TOKEN | Consultar/simular, activar/desactivar, ingresar eventos, ejecutar y reconciliar; no editar reglas |
+Se configura `ADMIN_BOOTSTRAP_TOKEN` o `ADMIN_BOOTSTRAP_TOKEN_FILE` para la primera inicialización:
+mínimo 32 caracteres ASCII imprimibles sin espacios, generado aleatoriamente por el operador o
+por el instalador. La API registra sólo SHA-256 y un marcador de bootstrap en una transacción
+protegida contra múltiples réplicas. Luego la DB es la fuente de verdad: se puede retirar la variable.
+Aunque quede configurada, se cambie su valor o se rote el token, un reinicio no restaura la credencial
+inicial. Borrar o vencer los tokens tampoco habilita otro bootstrap. El runtime no tiene permisos
+para actualizar/borrar el marcador; no existe recuperación pública ni un token maestro oculto.
 
-Los tres tokens limitados son opcionales; vacío significa deshabilitado. Deben ser distintos,
-de al menos 32 caracteres ASCII. Son identidades de servicio, no RBAC por usuario ni multi-tenancy.
-La auditoría de mutaciones de reglas/replay/reconciliación identifica el rol, nunca el token.
+El administrador emite tokens aleatorios opacos (`jrl_...`), con nombre, permisos y vencimiento
+obligatorio de 60 segundos a 365 días. El secreto se devuelve sólo en creación/rotación; las
+consultas sólo devuelven metadatos, nunca el secreto ni su hash. Guardamos SHA-256 de tokens de
+alta entropía, no contraseñas de usuario. La auditoría registra `token:<uuid>` y operaciones,
+nunca el secreto. Autenticación consulta DB, sin caché de credenciales revocadas entre réplicas;
+revocar bloquea solicitudes posteriores, no deshace acciones ya iniciadas en proveedores.
+
+| Permiso | Capacidades |
+| --- | --- |
+| `api:read` | Consultar, validar, evaluar y comparar sin ejecutar acciones. |
+| `rules:write` | Guardar borradores; no activar ni ejecutar flujos. |
+| `flows:operate` | Activar/desactivar, ingresar/reprocesar eventos y reconciliar ejecuciones; puede escribir en proveedores. |
+| `auth:admin` | Emitir, listar y revocar credenciales; incluye todos los permisos anteriores. |
+
+No se conceden permisos por defecto al emitir tokens. La GUI debe usar un token delegado con
+`api:read,rules:write,flows:operate`, o un subconjunto, mediante `STUDIO_BACKEND_TOKEN`/`_FILE`.
+No montar el bootstrap administrador en la GUI: guardar el delegado en `gui_api_token`, que el
+instalador deja vacío hasta emitirlo. El navegador no recibe el token configurado del gateway. El login Basic de
+la GUI se mantiene; compartir un token de GUI no equivale a auditoría individual por usuario.
+Jira, Bitbucket y la firma de webhooks mantienen secretos independientes.
+
+Los antiguos `API_TOKEN`, `ADMIN_TOKEN`, `READER_TOKEN`, `WRITER_TOKEN`, `OPERATOR_TOKEN` y
+sus variantes `_FILE` se rechazan explícitamente: no hay fallback legacy.
+
+### Emisión, revocación y rotación de credenciales
+
+| Endpoint | Autorización y resultado |
+| --- | --- |
+| `GET /v1/auth/me` | Cualquier token vigente; identidad, permisos efectivos y estado de rotación, sin secretos. |
+| `POST /v1/auth/tokens` | Administrador confirmado; body `name`, `permissions`, `expires_in_seconds`. Devuelve el token una vez. |
+| `GET /v1/auth/tokens?limit=100&offset=0` | Administrador confirmado; metadatos paginados, incluidos vencidos/revocados. |
+| `POST /v1/auth/tokens/{id}/revoke` | Administrador confirmado; revoca también su reemplazo pendiente. No permite revocar el último administrador activo confirmado. |
+| `POST /v1/auth/tokens/self/rotate` | Token local vigente; genera un reemplazo con exactamente sus permisos y vencimiento original. |
+| `POST /v1/auth/tokens/self/confirm` | Usar **el nuevo token pendiente**; revoca el anterior y confirma el nuevo en una transacción. |
+
+La ventana predeterminada es **una hora**, `AUTH_ROTATION_TTL_SECONDS=3600` (configurable entre
+60 y 86400 segundos). Nunca supera el vencimiento original. Sólo se permite una rotación pendiente
+por token. Durante la ventana ambos permiten sus operaciones normales; el reemplazo pendiente no
+puede emitir/listar/revocar credenciales ni iniciar otra rotación. Confirmarlo habilita los permisos
+administrativos que heredó. Si no se confirma a tiempo, el nuevo deja de autenticar y el anterior
+sigue vigente hasta su propio vencimiento/revocación. Puede iniciarse otra rotación después.
+Un administrador puede revocar un reemplazo pendiente cuyo secreto se haya perdido para reintentar.
+El secreto viejo de env nunca se reactiva; la API no modifica variables de entorno ni archivos.
+
+La GUI incluye **Accesos** para emitir, listar, revocar y rotar credenciales con un desbloqueo
+administrativo independiente de 15 minutos. No necesita otra variable de administrador. Los tokens
+nuevos se muestran una vez y deben guardarse; la rotación sigue teniendo una ventana de una hora.
+Ver [operación y límites de la GUI](docs/studio.md#accesos-administración-desde-la-gui).
+
+Ejemplo del body para emitir acceso a la GUI (llamada autenticada con el administrador):
+
+```json
+{"name":"gui-production","permissions":["api:read","rules:write","flows:operate"],"expires_in_seconds":2592000}
+```
+
+Guardar la respuesta secreta en el gestor de secretos, no en historial de shell, logs ni repositorio.
+Para rotar, llamar a `self/rotate` con el vigente y probar el nuevo con `GET /v1/schema`.
+Reemplazar la credencial del consumidor, reiniciarlo según su despliegue y verificar que ya usa el
+nuevo. Finalmente llamar a `self/confirm` usando el nuevo antes de la hora límite. La API no requiere
+reinicio para emitir, revocar o confirmar tokens. No usar el bootstrap como recuperación de acceso perdido.
+
+`app/auth.py` separa validación de credenciales (`Authenticator`) de identidad/permisos (`Identity`).
+Hoy implementa tokens locales persistidos; un futuro adaptador OAuth/OIDC para Ory Hydra podría devolver
+identidades y permisos a esta misma interfaz sin cambiar endpoints, reglas o worker. **Hydra no
+está implementado ni se ofrece un modo OAuth ficticio**; su integración requerirá configurar y
+validar emisión, audience/issuer, permisos y revocación/expiración según el tipo de token elegido.
 
 | Endpoint | Función |
 |---|---|
@@ -292,11 +356,11 @@ El contexto lo construye el worker
 desde Postgres; un evento entrante no puede sobrescribirlo. Las cadenas se reanudan desde el paso pendiente.
 Ejemplo: examples/jira-create-from-source.yaml (borrador, nunca activado automáticamente).
 
-El conector queda deshabilitado por defecto. Requiere JIRA_ACCOUNT_EMAIL, JIRA_API_TOKEN, JIRA_CLOUD_ID y
-ALLOWED_JIRA_PROJECTS. Usa exclusivamente https://api.atlassian.com/ex/jira/{cloudId}/rest/api/3.
-JIRA_REQUIRED_LABEL (default automation-managed) es obligatoria en todas las tarjetas leídas/modificadas;
-las tarjetas creadas reciben esa etiqueta. El proyecto real de cada tarjeta se verifica antes de actuar.
-ALLOWED_JIRA_FIELDS controla los campos; project/status/security/reporter no se pueden inyectar por fields.
+El conector requiere JIRA_API_TOKEN y JIRA_CLOUD_ID.
+Usa exclusivamente https://api.atlassian.com/ex/jira/{cloudId}/rest/api/3.
+No se exige ni agrega una etiqueta de alcance a los tickets. El proyecto real de cada tarjeta se verifica antes de actuar.
+Los proyectos/campos se especifican en el YAML y Jira aplica los permisos de la cuenta.
+Se conserva la validación del DSL: project/status/security/reporter no se pueden inyectar por fields.
 JIRA_MAX_DAILY_WRITES (default 100) limita globalmente intentos de escritura en 24 horas mediante Postgres.
 Cada intento reserva presupuesto antes del envío, incluso si luego queda ambiguo o recibe 429.
 
@@ -308,6 +372,63 @@ variables YAML no pueden definirlo. Las propiedades históricas de texto/id sigu
 del formato anterior: no se reescriben ni se usan como autorización. Las propiedades de Jira son
 visibles a usuarios/apps con acceso: no contienen secretos. El histórico completo permanece en Postgres.
 
+### API token de cuenta de servicio (Bearer)
+
+Jira Relay envía un API token de cuenta de servicio como `Authorization: Bearer <token>`.
+Bearer es la forma de enviar el API token, no otra credencial ni un flujo OAuth.
+El conector no requiere email. No asumir que un token personal anterior admite este mecanismo:
+validar la nueva credencial con una consulta de sólo lectura antes de ponerla en servicio.
+
+Para crear la credencial, un administrador de la organización debe:
+
+1. Entrar a [Atlassian Administration](https://admin.atlassian.com/) y seleccionar la organización.
+2. Abrir **Directory → Service accounts** y seleccionar o crear una cuenta dedicada a Jira Relay.
+3. Darle acceso a Jira y únicamente a los proyectos que debe operar, con los permisos necesarios.
+4. Elegir **Create credentials → API token → Next**; no seleccionar OAuth 2.0.
+5. Indicar un nombre, por ejemplo `jira-relay-production`, y un vencimiento según la política
+   de la empresa (Atlassian permite entre 1 y 365 días). Registrar responsable y fecha de renovación.
+6. En **Select token scopes**, seleccionar estos tres scopes **Classic**:
+
+   | Scope | Uso |
+   | --- | --- |
+   | `read:jira-work` | Consultar tickets y datos asociados para lecturas y comprobaciones previas. |
+   | `write:jira-work` | Crear/clonar, editar, comentar, vincular y cambiar estados de tickets. |
+   | `read:jira-user` | Identificar mediante `/myself` la cuenta del token y excluir globalmente sus eventos. |
+
+7. Revisar y crear el token. Guardarlo inmediatamente en el gestor de secretos de la empresa:
+   Atlassian lo muestra una sola vez. No copiarlo al chat, al repositorio ni a reglas YAML.
+
+Los dos scopes `jira-work` se verificaron en el selector de Atlassian el 15 de octubre de 2026;
+`read:jira-user` se agrega por el contrato documentado de [Get current user](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-myself/#api-rest-api-3-myself-get).
+No agregar scopes de administración de Jira o usuarios, Confluence o gestión de webhooks para
+las operaciones actuales. El webhook entrante usa su propio secreto de firma, no este token.
+
+**Importante:** `write:jira-work` es amplio y también permite operaciones de borrado.
+Aunque Jira Relay no implemente acciones de borrado, el scope por sí solo no las impide.
+No conceder a la cuenta de servicio permisos de **Delete Issues** ni otros permisos de borrado
+que no necesite. Los scopes no reemplazan los permisos de Jira: el acceso efectivo depende de
+ambos. Los límites de escritura del motor no sustituyen los permisos del proveedor.
+
+Configuración mínima del conector usando un archivo montado por el operador:
+
+```dotenv
+JIRA_API_TOKEN_FILE=/run/secrets/jira_api_token
+JIRA_CLOUD_ID=<cloud-id-del-sitio-jira>
+```
+
+El archivo contiene solamente el token, sin comillas ni el prefijo `Bearer`; la aplicación
+agrega el prefijo. `JIRA_CLOUD_ID` es el identificador del sitio Jira, no el de la organización.
+También se puede inyectar `JIRA_API_TOKEN` directamente mediante el gestor de secretos.
+Si está definida, esa variable tiene prioridad sobre `JIRA_API_TOKEN_FILE` sin abrir el archivo;
+un valor directo vacío no activa el fallback. La configuración se carga al arrancar:
+reiniciar los procesos consumidores al rotar el token.
+
+Antes de desplegar, verificar una lectura de un ticket permitido y confirmar que los permisos
+de proyecto cubren las acciones de los flujos. No revocar la credencial anterior hasta validar
+la nueva. No confundir las pruebas locales con una validación real de autenticación o permisos.
+
+Referencia: [API tokens de cuentas de servicio y autenticación Bearer (Atlassian)](https://support.atlassian.com/user-management/docs/manage-api-tokens-for-service-accounts/).
+
 ### Identificación legible de tickets
 
 Al crear o clonar, el motor agrega `automation-flujo-<name>` usando exactamente el `name` del YAML.
@@ -315,29 +436,118 @@ Ejemplo: `name: crear-repositorio` produce `automation-flujo-crear-repositorio`.
 el flujo creador, no la última regla que tocó el ticket. Revisiones del mismo flujo mantienen etiqueta;
 renombrar `name` crea otra regla. No se agregan UUIDs ni timestamps a las etiquetas.
 
-`automation-managed` (o JIRA_REQUIRED_LABEL existente) sigue siendo la marca de alcance operativo.
-No se cambia por defecto al actualizar y no se sustituye por la etiqueta del flujo. Es una guarda de
-la aplicación, no una frontera de permisos Jira: usar además identidad dedicada y permisos de proyecto.
-Los tests usan únicamente `automation-prueba` como etiqueta de negocio, además de las dos anteriores.
+`automation-managed` no tiene tratamiento especial: no se exige, no se agrega y puede quitarse
+como cualquier etiqueta de negocio. La actualización no recorre tickets existentes para borrarla.
+Usar identidad dedicada y permisos de proyecto en Jira.
 
 Las etiquetas de negocio se conservan al crear; duplicados se eliminan. Clonar conserva las etiquetas
 seleccionadas salvo las del flujo de origen, que se reemplazan por la del flujo creador de la copia.
 El prefijo `automation-flujo-` está reservado: el YAML no puede inventarlo al crear ni alterarlo al editar
-o transicionar. Al reemplazar labels en un ticket existente se deben conservar la marca de seguridad y
+o transicionar. Al reemplazar labels en un ticket existente se deben conservar
 sus etiquetas de flujo; un cambio que las elimine se rechaza. Máximo 30 etiquetas incluyendo las reservadas:
 si se excede, se rechaza antes de escribir, sin truncar ni borrar etiquetas de negocio.
 
 La actualización no recorre ni reetiqueta tickets históricos automáticamente. Para migrarlos, inventariar
 las claves exactas, verificar la regla original en el histórico y preservar sus etiquetas de negocio.
-No cambiar JIRA_REQUIRED_LABEL de una instalación activa sin migrar sus tickets y configuración juntos.
+
+### Controles de alcance antes de escribir
+
+La política es parte del backend; no depende de una confirmación en la GUI ni de variables de
+despliegue. `POST /v1/rules/validate` comprueba seguridad incluso con `targets=false`. Guardar un
+borrador sigue permitido, pero **activarlo exige superar estos controles**:
+
+- Toda regla con efectos (incluidos pipelines) debe acotar el origen con `eq` o un `in` no vacío
+  sobre `issue.key`, `issue.fields.project.key` o `issue.fields.project.id`. `exists`, `ne`, `not`,
+  `contains` y listas vacías no cuentan como alcance. No se imponen proyectos por env var.
+- En `any`, cada rama debe garantizar alcance. Un `all` exterior puede aportar una restricción
+  común. El análisis es conservador: no intenta resolver equivalencias lógicas arbitrarias.
+- Si el trigger es `jira:issue_updated`, debe existir un `some` positivo sobre `changelog.items`
+  cuyo **mismo `where`** garantice `field`/`fieldId` y una comparación positiva `eq`/`in` sobre
+  `from`, `to`, `fromString` o `toString`. La mera presencia del changelog o del campo no alcanza.
+- Una transición necesita `from_status_id` y `to_status_id` distintos. Se comprueba el estado
+  actual antes del envío, aunque Jira puede cambiar concurrentemente después de esa lectura.
+- Los destinos de acciones Jira deben ser claves literales (incluido cross-project), `issue.key`
+  o `.key` de un paso Jira anterior que produzca ese resultado. No se aceptan destinos calculados
+  libremente desde custom fields, templates parciales, pasos futuros ni fallbacks. Esto se aplica
+  también a `source`, `parent`, `inward` y `outward` dentro de una regla con escrituras.
+- Las reglas exclusivamente `jira.issue.get` no necesitan alcance de escritura. En el origen
+  autenticado `test` se permite además acotar mediante un `test_id` explícito con `eq`/`in`;
+  no es una excepción general a las verificaciones de destinos ni transiciones.
+
+Ejemplo mínimo de filtro de una escritura disparada por actualización:
+
+```yaml
+when:
+  all:
+    - {path: issue.fields.project.key, op: eq, value: SUPPORT}
+    - some:
+        path: changelog.items
+        where:
+          all:
+            - {path: field, op: eq, value: status}
+            - {path: fromString, op: eq, value: Open}
+            - {path: toString, op: eq, value: Approved}
+```
+
+La API devuelve 422 con `unsafe_write_scope`, `unsafe_change_scope`, `unsafe_transition` o
+`unsafe_action_target`. El control se repite al activar, distribuir eventos y antes de nuevas
+acciones del worker. Revisiones inseguras antiguas dejan de producir ejecuciones; si ya había
+una tarea encolada, se detiene con `unsafe_rule_execution_blocked`. Un pipeline ya enviado se
+sigue consultando para conocer su resultado, pero no habilita nuevas escrituras inseguras.
+No se reescriben YAML históricos ni sus checksums; hay que crear una revisión corregida.
+
+Estos controles **no son una prueba de ausencia de bucles**, ni un límite de cantidad de tickets
+afectados por una regla válida. Un proyecto grande aún puede generar muchos eventos coincidentes;
+los presupuestos globales de Jira/Bitbucket siguen activos. La deduplicación cubre la misma entrega,
+no la causalidad de nuevos webhooks ni ciclos A → B → A. No hay detector general de ciclos entre
+reglas/automatizaciones externas en esta versión. Revisar simulaciones históricas y el alcance de
+cada regla antes de activarla, y usar una cuenta de servicio con permisos mínimos.
+
+### Exclusión global de eventos del servicio
+
+No es una opción de cada regla ni una lista manual en env vars. Antes de ejecutar tareas con el
+conector Jira configurado, el worker identifica la cuenta del token mediante `GET /rest/api/3/myself`
+y persiste su `accountId` en DB. Si no puede verificarla, no despacha acciones; requiere un token
+con `read:jira-user` además de los scopes de trabajo. No hay que darle ese token al receptor.
+Si una consulta de ticket devuelve 200 pero `/myself` devuelve 401 con `scope does not match`,
+la credencial no habilita la identificación de su cuenta: emitir un token con `read:jira-user` y
+actualizar su fuente de secreto. No desactivar la verificación ni inferir el sujeto desde un ticket.
+
+La migración `004_service_actors.sql` agrega el registro de identidades y la asociación con un
+SHA-256 de la credencial y el Cloud ID. No se guarda el token en esa tabla. Las identidades y
+asociaciones son append-only para el runtime: volver a correr `deploy/runtime-grants.sql` después
+de migrar. Las cuentas anteriores no se eliminan al rotar credenciales, para cubrir eventos demorados.
+Todos los workers/servicios comparten este registro; no hay una consulta remota por evento.
+
+Antes de evaluar reglas, el ingreso nativo y `POST /v1/events` aplican la misma política:
+
+- Actor registrado: guardar payload e identidad de entrega, marcar `ignored_service_actor` y no
+  evaluar reglas ni crear ejecuciones. Se aplica a creaciones/clonados, actualizaciones, borrados,
+  comentarios, transiciones, vínculos, worklogs y otros eventos, independientemente del flujo/proyecto.
+- Jira sin actor inequívoco: conservar como `held_actor_unknown`, sin ejecución ni replay. Algunos
+  tipos de webhook pueden no identificar quién actuó; no se infiere desde el creador del ticket.
+- Un evento posterior de una persona sobre un ticket creado por el servicio se procesa normalmente.
+  Tampoco se confunde al autor original de un comentario/worklog con su editor o con quien lo borró.
+- Replay manual devuelve 409. El worker reevalúa la exclusión para trabajos encolados antes de
+  registrar la identidad, cancela pendientes y vuelve a comprobar el actor antes de reservar escrituras
+  Jira o Bitbucket. Las llamadas ya enviadas no pueden deshacerse; se permite observar un pipeline
+  ya iniciado, pero no continuar con nuevas acciones del evento excluido.
+
+La GUI muestra el motivo y deshabilita ejecutar esos eventos; el backend lo impide aunque se llame
+directamente a la API. `GET /v1/events/{id}` incluye `execution_blocked_reason` y `last_error`.
+La exclusión funciona también para el origen autenticado `test` si su payload identifica una cuenta
+del servicio. Los eventos sintéticos sin actor siguen siendo una función privilegiada del operador;
+la API autenticada no prueba que un actor declarado por ese operador sea auténtico.
+
+Usar una cuenta **dedicada**: cualquier acción manual u otra integración que use esa misma cuenta
+también será ignorada. No usar un usuario personal. No se corrigen ni revierten efectos históricos.
+Este control evita reentrada de las cuentas conocidas del servicio, no demuestra ausencia de ciclos
+mediante otras cuentas, Jira Automation u otros sistemas. Los filtros de alcance y cuotas siguen activos.
 
 ### Límites de recuperación
 
 No hay reconciliación automática Jira aún; /reconcile sólo acepta pipelines de Bitbucket.
-JIRA_IGNORED_ACTOR_IDS acepta account IDs separados por coma de una cuenta de servicio dedicada.
-Sus webhooks se conservan pero no disparan reglas, y se rechaza su replay con execute.
-No usar la cuenta personal del operador para este filtro. El límite diario contiene un bucle;
-ignorar un actor conocido no sustituye seguimiento general de causalidad entre sistemas.
+La exclusión de cuentas del servicio es global y persistente, descrita arriba.
 La comprobación de estado antes de transicionar no es atómica con cambios concurrentes en Jira.
 
 La suite incluye Postgres real y proveedor HTTP simulado para las nuevas acciones.
@@ -356,7 +566,7 @@ El nombre de proyecto separado evita reutilizar accidentalmente volúmenes del l
 Pruebas unitarias: uv run pytest tests/test_dsl.py -q.
 Integración: crear la base dedicada automation_test en Postgres local y ejecutar:
 
-    TEST_DATABASE_URL=postgresql://automation:local-test-only@127.0.0.1:55439/automation_test uv run pytest -q
+    TEST_DB_HOST=127.0.0.1 TEST_DB_PORT=55439 TEST_DB_NAME=automation_test TEST_DB_USER=automation TEST_DB_PASSWORD=local-test-only uv run pytest -q
 
 Las pruebas rechazan bases con otro nombre; nunca ejecutarlas contra la base del despliegue.
 Las pruebas de migraciones crean bases y un rol temporales en ese servidor: usar PostgreSQL
@@ -374,32 +584,44 @@ Para Compose con PostgreSQL administrado por el operador:
 
 1. Preparar una base y dos roles: propietario para migraciones, runtime sin permisos DDL/superuser.
 2. Crear un archivo de configuración a partir de .env.example en una ruta nueva, sin sobrescribir .env existente.
-3. Ejecutar `uv run python tools/init_installation.py`; pide ambos DSN sin mostrarlos y genera secretos.
-   Se niega a sobrescribir un directorio existente. Los tokens de conectores/roles opcionales empiezan vacíos.
-4. Configurar allowlists, email/cloud ID e identidad de servicio. Cargar credenciales de conectores en los
-   archivos privados, nunca en YAML de reglas. El runtime soporta NAME o NAME_FILE, no ambos.
+3. Configurar `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER` (runtime) y `DB_MIGRATION_USER` (migrador)
+   en el archivo de instalación. Ejecutar `uv run python tools/init_installation.py`: pide ambas
+   contraseñas sin mostrarlas y genera los archivos `db_runtime_password` y `db_migrator_password`.
+   Se niega a sobrescribir un directorio existente. Genera un único archivo `admin_bootstrap_token`;
+   los tokens de conectores opcionales empiezan vacíos.
+4. Configurar allowlists, cloud ID e identidad de servicio (email sólo para Bitbucket). Cargar credenciales de conectores en los
+   archivos privados, nunca en YAML de reglas. Los secretos se resuelven primero desde NAME;
+   sólo si no está definida se lee el archivo indicado por NAME_FILE. Si ambas existen gana NAME,
+   sin abrir el archivo. Un valor directo vacío no activa el fallback y los secretos obligatorios fallan.
 5. Construir `docker build -t automation-api:1.0.0 .` o usar una imagen de un registro privado validado.
 6. Ejecutar primero `docker compose --env-file install.env run --rm migrate` con el archivo elegido.
 7. Aplicar deploy/runtime-grants.sql como propietario, pasando runtime_role al cliente psql.
    Otorga DML en datos y lectura de metadatos de instalación/migración; no otorga CREATE ni propiedad.
    La aplicación no crea tablas al arrancar. Usar este script sólo en una base dedicada al producto.
 8. Ejecutar `docker compose --env-file install.env up -d`. La migración idempotente debe finalizar antes de los servicios.
+9. Con el administrador inicial, emitir un token delegado para la GUI mediante `POST /v1/auth/tokens`,
+   guardarlo en `gui_api_token` y preparar la contraseña de login antes de habilitar el perfil `studio`.
+   Retirar el bootstrap del proceso si se desea; no usarlo como credencial de la GUI.
 
 El Compose principal no incluye una base con password prefijado: puede apuntar a PostgreSQL externo,
-otro contenedor o un servicio administrado. Los DSN se interpretan desde los contenedores; localhost
-no es el host ni otro contenedor. Usar sslmode=verify-full y CA montada para conexiones remotas.
-Agregar el montaje de CA al Compose si el proveedor no usa una autoridad presente en la imagen.
+otro contenedor o un servicio administrado. `DB_HOST` se interpreta desde los contenedores; localhost
+no es el host ni otro contenedor. El driver recibe parámetros separados, no una URL construida
+manualmente: las contraseñas no requieren URL-encoding. `DATABASE_URL` y `DATABASE_URL_FILE`
+se rechazan explícitamente, sin compatibilidad legacy. Esta configuración no agrega controles SSL
+ni certificados; tampoco garantiza por sí sola que la conexión esté cifrada o sin cifrar.
 
 La carpeta secrets tiene modo 0700; los archivos 0444 permiten lectura al UID 10001 dentro de los
 contenedores a los que Compose los monta. El directorio privado impide acceso de otros usuarios del host.
 No mover esos archivos a directorios públicos. En Linux validar propietarios/montajes; en plataformas
-administradas usar su mecanismo de secretos. La configuración se carga al arrancar: rotar exige reinicio
-controlado. No hay recarga en caliente ni período de doble clave de webhook en esta versión.
+administradas usar su mecanismo de secretos. Cambiar variables/archivos requiere reiniciar el consumidor
+afectado. Los tokens de nuestra API se emiten, revocan y rotan en DB sin reiniciar la API; si cambia el
+token del gateway, actualizar su secreto y reiniciar el gateway antes de confirmar. No hay recarga en
+caliente de archivos ni período de doble clave de webhook en esta versión.
 
 Compose publica administración sólo en 127.0.0.1:8088 y webhooks sólo en 127.0.0.1:8089. Poner delante
 del segundo un proxy HTTPS con límites de conexión, tiempo y tasa. Nunca publicar el primero sin una
-red privada/control de acceso. API_SURFACE=webhooks rechaza rutas administrativas aun si el proxy falla;
-API_SURFACE=management rechaza webhooks. API_SURFACE=all es para instalaciones privadas simples.
+red privada/control de acceso. `app.webhooks:app` no registra rutas administrativas y
+`app.main:app` no registra webhooks: el servicio lo define su punto de entrada, no una env var.
 No montar el socket Docker en ningún componente. El frontend no es necesario para operar.
 
 | Plataforma | Mapeo del mismo contrato de ejecución |
@@ -411,6 +633,249 @@ No montar el socket Docker en ningún componente. El frontend no es necesario pa
 No hay manifiestos K8s/ECS genéricos certificados en esta release. No requieren cambios de código,
 pero deben probarse en la plataforma elegida. Si se agregan hostnames en Kubernetes, usar external-dns
 en los manifests como fuente de verdad. Los despliegues particulares no deben copiarse como producto universal.
+
+## Parámetros de configuración (inventario completo)
+
+La aplicación no carga archivos `.env` por sí sola: el operador o Compose inyecta las variables.
+Los parámetros no secretos se configuran directamente. Los secretos marcados con **†** admiten
+el nombre directo o el mismo nombre terminado en `_FILE`: gana el directo si está definido,
+incluso si está vacío; sólo si no existe se lee el archivo UTF-8. No hay fallback a una credencial
+anterior cuando el valor directo está vacío. Reiniciar los procesos afectados después de cambios.
+
+### Mapa por servicio
+
+Cada bloque es completo e independiente; no requiere Compose ni heredar otros bloques.
+El operador inyecta estas variables con su plataforma de servicios. Los valores entre `<...>`
+deben reemplazarse; los secretos pueden entregarse directamente o con la alternativa `_FILE`.
+Las rutas de archivos las define el despliegue, no la aplicación. No guardar secretos reales en Git.
+
+#### `api`: API de gestión
+
+Arranque: `uvicorn app.main:app --host 0.0.0.0 --port 8080 --no-access-log --no-proxy-headers --limit-concurrency 100 --timeout-graceful-shutdown 120`.
+Este punto de entrada no registra rutas `/webhooks/*`.
+
+```dotenv
+TENANT_ID=mi-empresa
+DB_HOST=<host-postgresql>
+DB_PORT=5432
+DB_NAME=jira_relay
+DB_USER=jira_relay_runtime
+DB_PASSWORD=<secreto-runtime>
+ADMIN_BOOTSTRAP_TOKEN=<secreto-inicial-minimo-32-caracteres>
+AUTH_ROTATION_TTL_SECONDS=3600
+MAX_BODY_BYTES=10485760
+# Opcionales: permiten mostrar el estado del conector en el catálogo.
+JIRA_CLOUD_ID=<cloud-id-jira>
+JIRA_API_TOKEN=<token-jira>
+# Sólo si se utiliza Bitbucket; la API valida los repositorios de las reglas.
+BITBUCKET_ACCOUNT_EMAIL=<email-bitbucket>
+BITBUCKET_API_TOKEN=<token-bitbucket>
+ALLOWED_REPOSITORIES=<workspace/repositorio>
+```
+
+Bootstrap sólo es necesario para registrar el primer administrador en una DB no inicializada.
+Después no se vuelve a usar para autenticar y puede retirarse. No necesita `JIRA_WEBHOOK_SECRET`.
+Los proyectos y campos Jira se definen en las reglas; no hay allowlists Jira en env vars.
+
+#### `webhooks`: receptor de eventos
+
+Arranque: `uvicorn app.webhooks:app --host 0.0.0.0 --port 8080 --no-access-log --no-proxy-headers --limit-concurrency 100 --timeout-graceful-shutdown 120`.
+No registra API administrativa, OpenAPI ni métricas privadas; sólo webhook y probes.
+
+```dotenv
+TENANT_ID=mi-empresa
+DB_HOST=<host-postgresql>
+DB_PORT=5432
+DB_NAME=jira_relay
+DB_USER=jira_relay_runtime
+DB_PASSWORD=<secreto-runtime>
+JIRA_WEBHOOK_SECRET=<secreto-firma-minimo-32-caracteres>
+MAX_BODY_BYTES=10485760
+```
+
+No recibe bootstrap, tokens administrativos, credenciales Jira ni credenciales Bitbucket.
+El secreto HMAC del receptor no es el API token del proveedor. La exclusión global de actores
+consulta el registro compartido en DB; también se aplica a la ingesta autenticada de la API.
+
+#### `worker`: ejecutor
+
+Arranque: `python -m app.worker`.
+
+```dotenv
+TENANT_ID=mi-empresa
+DB_HOST=<host-postgresql>
+DB_PORT=5432
+DB_NAME=jira_relay
+DB_USER=jira_relay_runtime
+DB_PASSWORD=<secreto-runtime>
+JIRA_CLOUD_ID=<cloud-id-jira>
+JIRA_API_TOKEN=<token-jira>
+JIRA_MAX_DAILY_WRITES=100
+# Sólo si se utiliza Bitbucket.
+BITBUCKET_ACCOUNT_EMAIL=<email-bitbucket>
+BITBUCKET_API_TOKEN=<token-bitbucket>
+ALLOWED_REPOSITORIES=<workspace/repositorio>
+BITBUCKET_MAX_DAILY_WRITES=100
+# Omitir para usar el hostname; si se configura, debe ser único por worker.
+# WORKER_ID=<identidad-unica-del-worker>
+```
+
+No necesita bootstrap, secreto de webhook ni configuración Studio. No expone un servidor HTTP.
+No necesita `MAX_BODY_BYTES` ni `AUTH_ROTATION_TTL_SECONDS`.
+Para deshabilitar Jira, omitir su token. Sin repositorios Bitbucket permitidos, no se despachan pipelines.
+
+#### `migrate`: trabajo de migración previo al arranque
+
+Arranque: `python -m app.migrate`. Es un trabajo previo, no un servicio permanente.
+
+```dotenv
+TENANT_ID=mi-empresa
+DB_HOST=<host-postgresql>
+DB_PORT=5432
+DB_NAME=jira_relay
+DB_USER=jira_relay_migrator
+DB_PASSWORD=<secreto-migrador>
+```
+
+No recibe credenciales de proveedores, bootstrap ni variables Studio. Se ejecuta con
+`python -m app.migrate` y termina. `DB_MIGRATION_USER` no es una variable leída por Python:
+es una entrada de Compose que éste transforma en `DB_USER` exclusivamente para este servicio.
+
+#### `studio`: jira-relay-studio
+
+Arranque: `python -m tools.studio_server` (assets compilados incluidos en la imagen).
+No recibe configuración de DB, tenant ni proveedores:
+
+```dotenv
+STUDIO_BACKEND_URL=https://<host-api>
+STUDIO_PUBLIC_ORIGIN=https://relay.<dominio-de-tu-empresa>
+STUDIO_BACKEND_TOKEN=<token-delegado-de-nuestra-api>
+STUDIO_AUTH_MODE=basic
+STUDIO_LOGIN_USERNAME=operator
+STUDIO_LOGIN_PASSWORD=<secreto-minimo-16-caracteres>
+STUDIO_HOST=0.0.0.0
+STUDIO_PORT=8080
+# Opcional: normalmente se deja el directorio incluido en la imagen.
+# STUDIO_STATIC_DIR=/app/frontend/dist
+```
+
+`gui_api_token` contiene un token delegado de nuestra API, normalmente con
+`api:read,rules:write,flows:operate`, **sin `auth:admin`**. Para administrar credenciales se ingresa
+el token administrador en Accesos; no se configura otra env var ni se monta el bootstrap en Studio.
+Para una consola local se puede usar `STUDIO_PUBLIC_ORIGIN=http://127.0.0.1:8093` conservando
+el login Basic. Los límites generales del gateway son fijos: 10 MiB por solicitud y 32 MiB por
+respuesta; no hay un `MAX_BODY_BYTES` propio de Studio.
+
+#### Resumen de secretos por servicio (Compose principal)
+
+| Servicio | Archivos montados en `/run/secrets/` |
+| --- | --- |
+| `api` | `db_runtime_password`, `admin_bootstrap_token`, `jira_api_token`, `bitbucket_api_token` |
+| `webhooks` | `db_runtime_password`, `jira_webhook_secret` |
+| `worker` | `db_runtime_password`, `jira_api_token`, `bitbucket_api_token` |
+| `migrate` | `db_migrator_password` |
+| `studio` | `gui_api_token`, `studio_login_password` |
+
+Cada secreto puede sustituirse por su env var directa, sin `_FILE`, en otro empaquetado.
+El Compose principal utiliza archivos deliberadamente; exportar un secreto en el host no lo
+inyecta automáticamente si no está mapeado en el manifest. No configurar ambas variantes.
+
+`AUTOMATION_IMAGE`, `STUDIO_IMAGE`, `AUTOMATION_SECRETS_DIR`, `DB_MIGRATION_USER`,
+`ADMIN_PORT`, `WEBHOOK_PORT`, `STUDIO_BIND_ADDRESS` y `STUDIO_PUBLISHED_PORT` son entradas
+de **Compose**, no variables que deban agregarse a todos los contenedores. Ver su inventario abajo.
+El archivo [.env.example](.env.example) concentra las entradas del Compose principal, incluido
+el perfil opcional Studio; no es un archivo para inyectar entero en cada servicio.
+
+La tarea opcional de retención recibe `TENANT_ID`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`
+y `DB_PASSWORD`/`DB_PASSWORD_FILE`, sin credenciales de proveedores.
+
+### Base de datos e instalación
+
+| Parámetro | Obligatorio / valor predeterminado | Uso |
+| --- | --- | --- |
+| `TENANT_ID` | Obligatorio; 1–100 caracteres seguros | Identidad inmutable de esta instalación en su DB. No es el Cloud ID de Jira. |
+| `DB_HOST` | Obligatorio | Host de PostgreSQL visto desde el proceso/contenedor. |
+| `DB_PORT` | `5432`; rango 1–65535 | Puerto de PostgreSQL. |
+| `DB_NAME` | Obligatorio | Base dedicada a la instalación. |
+| `DB_USER` | Obligatorio | Usuario de este proceso: runtime o migrador, según el servicio. |
+| `DB_PASSWORD` **†** | Obligatorio, sin valor predeterminado | Contraseña del usuario indicado; alternativa `DB_PASSWORD_FILE`. |
+
+API, worker, webhooks, migraciones, retención y probe del worker usan estos mismos nombres.
+Sólo el migrador recibe credenciales de propietario/DDL. No hay parámetros SSL propios en este cambio.
+`DATABASE_URL` y `DATABASE_URL_FILE` se rechazan, aunque también estén configurados los parámetros nuevos.
+
+### API, eventos y worker
+
+| Parámetro | Obligatorio / valor predeterminado | Uso |
+| --- | --- | --- |
+| `ADMIN_BOOTSTRAP_TOKEN` **†** | Sólo en la primera inicialización de la API de gestión | Registra el primer administrador; después se ignora y puede retirarse. No es el token de Jira. |
+| `AUTH_ROTATION_TTL_SECONDS` | `3600`; rango 60–86400 | Ventana para confirmar una rotación con el nuevo token. |
+| `JIRA_WEBHOOK_SECRET` **†** | Obligatorio en el receptor de webhooks | Firma HMAC del webhook entrante, independiente del API token. |
+| `MAX_BODY_BYTES` | `10485760` (10 MiB); rango 1024–10485760 | Límite del cuerpo HTTP entrante. GUI admite hasta 10 MiB por solicitud; respuestas hasta 32 MiB. No implica capacidad de carga ilimitada. |
+| `WORKER_ID` | Hostname del proceso | Identidad de heartbeat. Configurar una identidad única por worker si comparten hostname. |
+
+Bootstrap y secreto de webhook: mínimo 32 caracteres ASCII; valores distintos al inicializar.
+El worker no necesita el bootstrap ni el secreto del webhook. Configurar un token para nuestra API
+no otorga privilegios nuevos en Jira. Los tokens delegados y su rotación se administran en DB/API,
+sin una env var nueva por token y sin RBAC individual de usuarios de GUI por ahora.
+
+### Conector Jira
+
+| Parámetro | Obligatorio / valor predeterminado | Uso |
+| --- | --- | --- |
+| `JIRA_API_TOKEN` **†** | Para ejecutar acciones Jira | API token de cuenta de servicio enviado como Bearer; sin email. |
+| `JIRA_CLOUD_ID` | Para ejecutar acciones Jira | UUID del sitio Jira Cloud. |
+| `JIRA_MAX_DAILY_WRITES` | `100`; rango 1–100000 | Intentos de escritura por ventana móvil de 24 h, compartidos en DB. |
+
+### Conector Bitbucket
+
+| Parámetro | Obligatorio / valor predeterminado | Uso |
+| --- | --- | --- |
+| `BITBUCKET_ACCOUNT_EMAIL` | Para ejecutar pipelines | Cuenta asociada al API token de Bitbucket. |
+| `BITBUCKET_API_TOKEN` **†** | Para ejecutar pipelines | Credencial del proveedor; Bitbucket conserva su autenticación actual. |
+| `ALLOWED_REPOSITORIES` | Vacío: ningún repositorio habilitado | Lista `workspace/repository`, separada por comas. |
+| `BITBUCKET_MAX_DAILY_WRITES` | `100`; rango 1–100000 | Presupuesto compartido de intentos de despacho por 24 h. |
+
+### GUI (proceso opcional)
+
+| Parámetro | Obligatorio / valor predeterminado | Uso |
+| --- | --- | --- |
+| `STUDIO_BACKEND_URL` | Obligatorio | URL de nuestra API vista desde la GUI; no de Jira. |
+| `STUDIO_PUBLIC_ORIGIN` | Obligatorio | Origen del navegador; exige HTTPS fuera de loopback. |
+| `STUDIO_BACKEND_TOKEN` **†** | Obligatorio | Token de nuestra API mantenido del lado servidor. |
+| `STUDIO_AUTH_MODE` | `basic` | `local` sólo como excepción explícita, con bind y origen loopback. |
+| `STUDIO_LOGIN_USERNAME` | Obligatorio en modo `basic` | Usuario de ingreso a la GUI. |
+| `STUDIO_LOGIN_PASSWORD` **†** | Obligatorio en modo `basic`, mínimo 16 caracteres | Contraseña de ingreso, distinta de la credencial del backend. |
+| `STUDIO_HOST` | `127.0.0.1` en proceso; `0.0.0.0` dentro de la imagen | Dirección donde escucha la GUI. |
+| `STUDIO_PORT` | `8080`; rango 1–65535 | Puerto del proceso GUI. |
+| `STUDIO_STATIC_DIR` | `frontend/dist` dentro de la instalación | Directorio de assets compilados; normalmente no se cambia. |
+
+### Parámetros adicionales del empaquetado Compose
+
+Estos nombres los consume Compose, no el código del motor:
+
+| Parámetro | Valor predeterminado / requisito | Uso |
+| --- | --- | --- |
+| `DB_MIGRATION_USER` | Obligatorio en Compose principal | Se inyecta como `DB_USER` sólo en `migrate`. No lo recibe el runtime. |
+| `AUTOMATION_IMAGE` | `automation-api:1.0.0` | Imagen de API, worker y migrador. |
+| `AUTOMATION_SECRETS_DIR` | `./secrets` | Directorio privado con los archivos de secretos. |
+| `ADMIN_PORT` | `8088` | Publicación en loopback de la API administrativa. |
+| `WEBHOOK_PORT` | `8089` | Publicación en loopback del receptor; el operador agrega su entrada HTTPS. |
+| `STUDIO_IMAGE` | `jira-relay-studio:1.0.0` | Imagen de GUI. |
+| `STUDIO_BIND_ADDRESS` | `127.0.0.1` | Dirección de publicación de la GUI en el host. |
+| `STUDIO_PUBLISHED_PORT` | `8093` | Puerto de publicación de la GUI en el host. |
+
+El Compose principal monta `db_runtime_password` en API/worker/webhooks y `db_migrator_password`
+sólo en `migrate`; no se guardan host/base/usuario dentro del archivo de contraseña.
+El perfil `studio` es opcional. En el Compose de GUI independiente, `STUDIO_BACKEND_TOKEN_FILE`
+y `STUDIO_LOGIN_PASSWORD_FILE` indican archivos del host que se montan en el contenedor;
+consultar [la guía de GUI](docs/studio.md) para las diferencias de empaquetado.
+
+Las pruebas usan exclusivamente `TEST_DB_HOST`, `TEST_DB_PORT`, `TEST_DB_NAME=automation_test`,
+`TEST_DB_USER` y `TEST_DB_PASSWORD`/`TEST_DB_PASSWORD_FILE`, con roles de laboratorio capaces de
+crear DB/roles para las pruebas de migración. No apuntarlas a una base operativa. `tools/selftest.py`
+los configura automáticamente en recursos descartables; no son parámetros de producción.
+Retención utiliza argumentos `--days` (90), `--limit` (100) y `--apply` (desactivado), no variables nuevas.
 
 ## Operación y actualización
 
@@ -443,12 +908,16 @@ ni insertar migraciones antes de otras publicadas. No se permiten huecos o núme
 # Consulta de solo lectura: valida y lista aplicadas/pendientes.
 python -m app.migrate --status
 
-# Aplica únicamente las pendientes usando el DSN del propietario.
+# Aplica únicamente las pendientes con DB_USER/DB_PASSWORD del migrador.
 python -m app.migrate
 ```
 
-Ambos comandos leen `DATABASE_URL` o `DATABASE_URL_FILE` y `TENANT_ID`. El servicio `migrate`
-de Compose usa el secreto `migration_database_url`; API/worker usan el de runtime.
+Ambos comandos leen `DB_HOST`, `DB_PORT` (5432 por defecto), `DB_NAME`, `DB_USER`,
+`DB_PASSWORD` o `DB_PASSWORD_FILE`, y `TENANT_ID`. Salud del worker y mantenimiento usan
+el mismo contrato. El servicio `migrate` de Compose recibe `DB_MIGRATION_USER` como su
+`DB_USER` y monta sólo `db_migrator_password`; API/worker/webhooks montan `db_runtime_password`.
+No hay una contraseña de migración accesible al runtime. El Compose de desarrollo es una excepción
+local descartable: usa un único usuario de laboratorio, no es el modelo de permisos de producción.
 
 Antes de ejecutar SQL nuevo, el migrador verifica todo el historial: debe ser un prefijo exacto
 de la release y cada SHA-256 debe coincidir con los bytes del archivo original. Un checksum
@@ -495,6 +964,6 @@ reconciliación Jira y causalidad entre sistemas; conflictos de orden/concurrenc
 schemas descriptivos completos; carga/fault injection prolongadas; auth por usuario si la instalación
 lo necesita; límites/alertas de ingreso en el proxy; backup/PITR y RPO/RTO de la instalación real;
 registro privado/digests, escaneo completo y firma/SBOM de imagen; aceptación de K8s/ECS si se ofrecen.
-Las migraciones, roles de servicio, probes y retención ya están implementados; esto no cierra esos gates.
+Las migraciones, credenciales de servicio, probes y retención ya están implementados; esto no cierra esos gates.
 Por ahora las revisiones y auditorías son append-only mediante API, no un almacén legal inmutable.
 Para PostgreSQL remoto, usar verify-full con CA/nombre adecuados; require cifra pero no verifica la identidad del servidor.

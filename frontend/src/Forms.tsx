@@ -620,7 +620,7 @@ function BindingMap({
       {typed && (
         <small className="muted">
           {t(
-            "summary, description, labels, priority, assignee, duedate o customfield_N. Los campos deben estar habilitados en la instalación.",
+            "summary, description, labels, priority, assignee, duedate o customfield_N. Jira valida los permisos y campos del proyecto.",
           ) + " "}
         </small>
       )}
@@ -718,7 +718,7 @@ export function ActionEditor({
                 onChange={(v) => set(key, v)}
               />
             );
-          const optional = !definition.required?.includes(key);
+          const optional = key !== 'from_status_id' && !definition.required?.includes(key);
           const stringType =
             p.type === "string" ||
             (p.anyOf?.some((v: Obj) => v.type === "string" && !v.$ref) &&

@@ -7,7 +7,10 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from app.dsl import Rule, RuleError, match
+from app.safety import validate_safety
 from app.migrate import check_schema
+from app.config import database_options
+from app.actors import credential_key, exclusion_reason, account_id
 
 principal = ContextVar("principal", default="system")
 
@@ -17,10 +20,10 @@ class Conflict(ValueError):
 
 
 class Store:
-    def __init__(self, url, tenant=None):
+    def __init__(self, database, tenant=None):
         self.tenant = tenant
-        self.pool = ConnectionPool(url, min_size=1, max_size=8, open=False,
-                                   kwargs={"row_factory": dict_row, "connect_timeout": 10,
+        self.pool = ConnectionPool(min_size=1, max_size=8, open=False,
+                                   kwargs={**database_options(database), "row_factory": dict_row, "connect_timeout": 10,
                                            "options": "-c search_path=public -c statement_timeout=15000 -c lock_timeout=10000"})
 
     def open(self):
@@ -38,6 +41,41 @@ class Store:
     def query(self, sql, args=()):
         with self.pool.connection() as conn:
             return conn.execute(sql, args).fetchall()
+
+    def jira_actor_for_credential(self, settings):
+        cloud, digest = credential_key(settings)
+        rows = self.query("SELECT account_id FROM service_actor_credentials WHERE provider='jira' AND cloud_id=%s AND credential_sha256=%s", (cloud, digest))
+        return rows[0]['account_id'] if rows else None
+
+    def remember_jira_actor(self, settings, identifier):
+        if account_id(identifier) is None:
+            raise ValueError('Invalid service account identity')
+        cloud, digest = credential_key(settings)
+        with self.pool.connection() as conn:
+            conn.execute("INSERT INTO service_actors(provider,account_id) VALUES('jira',%s) ON CONFLICT DO NOTHING", (identifier,))
+            added = conn.execute("INSERT INTO service_actor_credentials(provider,cloud_id,credential_sha256,account_id) VALUES('jira',%s,%s,%s) ON CONFLICT DO NOTHING RETURNING account_id", (cloud, digest, identifier)).fetchone()
+            stored = conn.execute("SELECT account_id FROM service_actor_credentials WHERE provider='jira' AND cloud_id=%s AND credential_sha256=%s", (cloud, digest)).fetchone()
+            if stored['account_id'] != identifier:
+                raise Conflict('Service credential identity changed unexpectedly')
+            if added:
+                self.audit(conn, 'register_service_actor', 'jira', {'account_id': identifier, 'cloud_id': cloud})
+
+    @staticmethod
+    def mark_excluded(conn, event, reason):
+        conn.execute("UPDATE events SET last_error=%s,processed_at=coalesce(processed_at,now()),attempts=greatest(attempts,1) WHERE id=%s", (reason, event['id']))
+        cancelled = conn.execute("UPDATE runs SET status='failed',last_error=%s,updated_at=now(),lease_until=NULL,lease_token=NULL WHERE event_id=%s AND status='pending' RETURNING id,step", (reason, event['id'])).fetchall()
+        for run in cancelled:
+            conn.execute("INSERT INTO run_log(run_id,step,status,detail) VALUES(%s,%s,'failed',%s)", (run['id'], run['step'], Jsonb({'error': reason})))
+        if event.get('last_error') != reason:
+            Store.audit(conn, 'exclude_event', str(event['id']), {'reason': reason})
+
+    def exclude_event(self, event_id):
+        with self.pool.connection() as conn:
+            event = conn.execute('SELECT * FROM events WHERE id=%s FOR UPDATE', (event_id,)).fetchone()
+            reason = exclusion_reason(conn, event)
+            if reason:
+                self.mark_excluded(conn, event, reason)
+            return reason
 
     def save_rule(self, rule, digest, text):
         with self.pool.connection() as conn:
@@ -64,6 +102,7 @@ class Store:
                 raise KeyError(name)
             if row["sha256"] != digest:
                 raise Conflict("Revision checksum mismatch")
+            validate_safety(Rule.model_validate(row['spec']))
             conn.execute("UPDATE rules SET active_version=%s WHERE name=%s", (version, name))
             self.audit(conn, "activate", name, {"version": version})
             return {"name": name, "active_version": version}
@@ -79,10 +118,16 @@ class Store:
 
     @staticmethod
     def fanout(conn, event):
+        reason = exclusion_reason(conn, event)
+        if reason:
+            Store.mark_excluded(conn, event, reason)
+            return
         versions = conn.execute("SELECT v.* FROM rules r JOIN rule_versions v ON v.rule_name=r.name AND v.version=r.active_version").fetchall()
         for version in versions:
             try:
-                trace = match(Rule.model_validate(version["spec"]), event["source"], event["event_type"], event["payload"])
+                rule = Rule.model_validate(version['spec'])
+                validate_safety(rule)
+                trace = match(rule, event["source"], event["event_type"], event["payload"])
             except RuleError as exc:
                 trace = {"matched": False, "error": str(exc)}
             inserted = conn.execute("INSERT INTO evaluations(event_id,rule_name,version,matched,trace) VALUES(%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING RETURNING matched",
@@ -92,7 +137,7 @@ class Store:
                              (uuid.uuid4(), event["id"], version["rule_name"], version["version"]))
         conn.execute("UPDATE events SET processed_at=now(), attempts=attempts+1 WHERE id=%s", (event["id"],))
 
-    def ingest(self, tenant, source, delivery_id, event_type, payload, raw, suppress=False):
+    def ingest(self, tenant, source, delivery_id, event_type, payload, raw):
         digest = hashlib.sha256(raw).hexdigest()
         with self.pool.connection() as conn:
             event = conn.execute("INSERT INTO events(id,tenant,source,delivery_id,event_type,payload,raw_body,sha256) VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING RETURNING *",
@@ -102,22 +147,28 @@ class Store:
                 event = conn.execute("SELECT * FROM events WHERE tenant=%s AND source=%s AND delivery_id=%s", (tenant, source, delivery_id)).fetchone()
                 if event["sha256"] != digest:
                     raise Conflict("Delivery identifier reused with different payload")
-            elif suppress:
-                conn.execute("UPDATE events SET processed_at=now(),attempts=1,last_error='ignored_jira_actor' WHERE id=%s", (event["id"],))
-            else:
+            reason = exclusion_reason(conn, event)
+            if reason:
+                self.mark_excluded(conn, event, reason)
+            elif not duplicate:
                 self.fanout(conn, event)
             runs = conn.execute("SELECT id,status,rule_name,version FROM runs WHERE event_id=%s", (event["id"],)).fetchall()
-            return {"event_id": event["id"], "duplicate": duplicate, "runs": runs}
+            return {"event_id": event["id"], "duplicate": duplicate, "runs": runs, 'ignored_reason': reason}
 
     def execute(self, event_id):
         with self.pool.connection() as conn:
             event = conn.execute("SELECT * FROM events WHERE id=%s FOR UPDATE", (event_id,)).fetchone()
             if not event:
                 raise KeyError(str(event_id))
-            if event["last_error"] == "ignored_jira_actor":
-                raise Conflict("Service-actor events cannot be executed")
             if event["payload_redacted_at"] is not None:
                 raise Conflict("Retained delivery identity has no executable payload")
-            self.fanout(conn, event)
-            self.audit(conn, "evaluate_active_versions", str(event_id), {})
-            return conn.execute("SELECT id,status,rule_name,version FROM runs WHERE event_id=%s", (event_id,)).fetchall()
+            reason = exclusion_reason(conn, event)
+            if reason:
+                self.mark_excluded(conn, event, reason)
+            else:
+                self.fanout(conn, event)
+                self.audit(conn, "evaluate_active_versions", str(event_id), {})
+                runs = conn.execute("SELECT id,status,rule_name,version FROM runs WHERE event_id=%s", (event_id,)).fetchall()
+        if reason:
+            raise Conflict('Excluded events cannot be executed: ' + reason)
+        return runs

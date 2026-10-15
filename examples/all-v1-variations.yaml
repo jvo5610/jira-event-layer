@@ -69,6 +69,7 @@ when:
           all:
             - {path: field, op: eq, value: status}
             - {path: from, op: ne, value: null}
+            - {path: to, op: eq, value: "10003"}
 
 # Nivel 3: acciones. El límite por regla es 10; este catálogo usa las 10 para
 # cubrir los ocho tipos disponibles y variantes importantes.

@@ -15,8 +15,8 @@ IDENTITY = ExecutionIdentity(rule_name="crear-repositorio", rule_version=2, rule
 
 
 def config():
-    return Settings("unused", "a"*40, "b"*40, jira_email="lab@example.com", jira_token="test-only", jira_required_label="automation-lab-managed",
-                    jira_cloud_id="11111111-1111-4111-8111-111111111111", allowed_jira_projects=("DEMO",))
+    return Settings("unused", "a"*40, "b"*40, jira_token="test-only",
+                    jira_cloud_id="11111111-1111-4111-8111-111111111111")
 
 
 def rule_for(actions):
@@ -27,7 +27,7 @@ def rule_for(actions):
 
 def issue(key="DEMO-4", status="10001", labels=None):
     return {"key": key, "fields": {"project": {"key": key.split("-")[0]}, "status": {"id": status},
-        "labels": ["automation-lab-managed"] if labels is None else labels, "summary": "Source",
+        "labels": [] if labels is None else labels, "summary": "Source",
         "description": {"type": "doc", "version": 1, "content": []}}}
 
 
@@ -50,6 +50,7 @@ def test_all_actions_roundtrip_and_dispatch(spec):
     def handler(request):
         calls.append(request)
         assert request.url.host == "api.atlassian.com"
+        assert request.headers["Authorization"] == "Bearer test-only"
         if request.method == "GET":
             if request.url.path.endswith("/transitions"):
                 return httpx.Response(200, json={"transitions": [{"id": "31", "to": {"id": "10003"}}]})
@@ -69,7 +70,7 @@ def test_all_actions_roundtrip_and_dispatch(spec):
         assert body["properties"] == [{"key": "automation.operation", "value": IDENTITY.provenance()}]
     if spec["type"] in {"jira.issue.create", "jira.issue.clone"}:
         body = json.loads(mutations[0].content)
-        assert body["fields"]["labels"] == [IDENTITY.flow_label, "automation-lab-managed"]
+        assert body["fields"]["labels"] == [IDENTITY.flow_label]
         assert body["fields"]["summary"] == "Source"
         assert body["properties"][0]["value"] == IDENTITY.provenance()
 
@@ -93,7 +94,7 @@ def test_jira_field_binding_and_current_issue_guard_accept_new_paths():
     assert result["guard_matched"] is True
 
 
-@pytest.mark.parametrize("key", ["OTHER-1", "DEMO-1/../../x", "https://evil.test", "DEMO-01", "DEMO-1?x=y"])
+@pytest.mark.parametrize("key", ["DEMO-1/../../x", "https://evil.test", "DEMO-01", "DEMO-1?x=y"])
 def test_reject_target_before_any_request(key):
     spec = {"type": "jira.comment.add", "issue": {"value": key}, "text": {"value": "hello"}}
     adapter = Jira(config(), httpx.Client(transport=httpx.MockTransport(lambda _: pytest.fail("network forbidden"))))
@@ -109,20 +110,42 @@ def test_forbidden_fields_rejected_at_parse(field):
         rule_for([action])
 
 
-def test_jira_disabled_by_default_and_customfields_require_server_allowlist():
+def test_projects_and_customfields_do_not_require_server_allowlists():
     rule = rule_for([ACTIONS[0]])
-    with pytest.raises(ValueError):
-        Settings("", "", "").check_targets(rule)
+    Settings("", "", "").check_targets(rule)
     action = copy.deepcopy(ACTIONS[2])
     action["fields"] = {"customfield_999": {"value": "x"}}
-    with pytest.raises(ValueError):
-        config().check_targets(rule_for([action]))
+    config().check_targets(rule_for([action]))
 
 
-def test_unmanaged_ticket_read_blocked():
+@pytest.mark.parametrize('project', ['DEMO', 'OTHER'])
+def test_customfield_write_in_any_jira_authorized_project(project):
+    key = project + '-4'
+    writes = []
+    def handle(request):
+        if request.method == 'GET':
+            assert request.url.params['fields'] == '*all'
+            return httpx.Response(200, json=issue(key))
+        writes.append(json.loads(request.content))
+        return httpx.Response(204)
+    action = {'type': 'jira.issue.edit', 'issue': {'value': key},
+              'fields': {'customfield_999': {'value': 'business-value'}}}
+    adapter = Jira(config(), httpx.Client(transport=httpx.MockTransport(handle)))
+    adapter.execute(rule_for([action]).actions[0], {}, IDENTITY, lambda: None)
+    assert writes == [{'fields': {'customfield_999': 'business-value'}}]
+
+
+def test_actual_project_must_still_match_issue_key():
+    data = issue()
+    data['fields']['project']['key'] = 'OTHER'
+    adapter = Jira(config(), httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=data))))
+    with pytest.raises(RuleError, match='scope_mismatch'):
+        adapter.execute(rule_for([ACTIONS[2]]).actions[0], {}, IDENTITY, lambda: pytest.fail('no write'))
+
+
+def test_ticket_without_labels_can_be_read():
     adapter = Jira(config(), httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=issue(labels=[])))))
-    with pytest.raises(RuleError, match="managed_label_required"):
-        adapter.execute(rule_for([ACTIONS[2]]).actions[0], {}, IDENTITY, lambda: pytest.fail("write forbidden"))
+    assert adapter.execute(rule_for([ACTIONS[6]]).actions[0], {}, IDENTITY, lambda: pytest.fail("read does not write"))["key"] == "DEMO-4"
 
 
 @pytest.mark.parametrize("status", [401, 403, 404])
@@ -233,18 +256,23 @@ def test_transition_must_resolve_unambiguously(transitions):
         adapter.execute(rule_for([ACTIONS[3]]).actions[0], {}, IDENTITY, lambda: pytest.fail("write forbidden"))
 
 
-def test_update_cannot_remove_managed_label():
+def test_update_can_remove_old_managed_label():
     action = copy.deepcopy(ACTIONS[2])
     action["fields"] = {"labels": {"value": ["other"]}}
-    adapter = Jira(config(), httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=issue()))))
-    with pytest.raises(RuleError, match="cannot_be_removed"):
-        adapter.execute(rule_for([action]).actions[0], {}, IDENTITY, lambda: pytest.fail("write forbidden"))
+    writes = []
+    def handle(request):
+        if request.method == "GET":
+            return httpx.Response(200, json=issue(labels=["automation-managed"]))
+        writes.append(json.loads(request.content))
+        return httpx.Response(204)
+    adapter = Jira(config(), httpx.Client(transport=httpx.MockTransport(handle)))
+    adapter.execute(rule_for([action]).actions[0], {}, IDENTITY, lambda: None)
+    assert writes[0]["fields"]["labels"] == ["other"]
 
 
 def test_lifecycle_example_parses():
     from pathlib import Path
     rule, _ = parse_rule(Path("examples/jira-create-from-source.yaml").read_text())
     settings = config()
-    settings.allowed_jira_projects = ("KAN",)
     settings.check_targets(rule)
     assert len(rule.actions) == 10

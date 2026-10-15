@@ -52,6 +52,7 @@ import {
   actionDefinitions,
   actionLabels,
   api,
+  eventExclusionMessage,
   hasStepReference,
   initialAction,
   newRule,
@@ -61,13 +62,15 @@ import {
 } from "./model";
 import "./style.css";
 import { ActionLibrary } from "./ActionLibrary";
+import { Access } from "./Access";
+import { ActionHelp } from "./ActionHelp";
 
 const Canvas = lazy(() => import("./Canvas"));
 const FieldCache = new Map<
   string,
   { at: number; fields: Suggestion[]; count: number }
 >();
-type Page = "rules" | "editor" | "events" | "runs" | "audit" | "settings";
+type Page = "rules" | "editor" | "events" | "runs" | "audit" | "settings" | "access";
 const whenDate = (s: string) =>
   new Date(s).toLocaleString(locale(), {
     dateStyle: "short",
@@ -167,7 +170,7 @@ function App() {
   }, [task]);
   const refresh = useCallback(
     async (current: Page, before?: string) => {
-      if (current === "editor") return;
+      if (current === "editor" || current === "access") return;
       const gen = ++requestGeneration.current;
       const endpoint =
         current === "settings"
@@ -504,13 +507,13 @@ function App() {
         <button
           className="brand"
           onClick={() => navigate("rules")}
-          aria-label={t("Automation Studio inicio")}
+          aria-label={t("jira-relay-studio inicio")}
         >
           <span className="brand-symbol">
             <Workflow size={25} />
           </span>
           <span>
-            automation<span className="brand-dot">.</span>
+            jira-relay-studio
           </span>
         </button>
         <nav>
@@ -541,6 +544,7 @@ function App() {
           <button aria-label={t("Instalación")} onClick={() => navigate("settings")}>
             <Settings2 size={18} /> {t("Instalación") + " "}
           </button>
+          <button onClick={() => navigate("access")}><ShieldCheck size={18} /> {t("Accesos")}</button>
           <div className="connection-info">
             {t("Backend")}
             <small>{connection?.backend_url ?? t("Sin verificar")}</small>
@@ -576,6 +580,7 @@ function App() {
                     runs: t("Ejecuciones"),
                     audit: t("Auditoría"),
                     settings: t("Instalación"),
+                    access: t("Accesos"),
                   }[page]}
             </span>
             {page === "editor" && (
@@ -1007,6 +1012,7 @@ function App() {
                           "El evento avanza solo cuando se cumple este filtro. Las rutas se evalúan sobre el payload original.",
                         ) + " "}
                       </p>
+                      <p className="muted">{t("Para escribir: acotá el proyecto o ticket con eq/in en cada rama. En issue_updated, indicá el campo cambiado y su valor anterior o nuevo dentro del mismo some.where.")}</p>
                       <FilterEditor
                         value={rule.when}
                         onChange={(when) => update({ ...rule, when })}
@@ -1044,6 +1050,7 @@ function App() {
                               "Sin credenciales del proveedor. Podés editar; las acciones externas no podrán completarse.",
                             )}
                       </div>
+                      <ActionHelp actions={rule.actions} index={actionIndex} />
                       <ActionEditor
                         action={action}
                         definition={definition}
@@ -1092,6 +1099,7 @@ function App() {
                       runs: t("Ejecuciones"),
                       audit: t("Registro de auditoría"),
                       settings: t("Tu instalación"),
+                      access: t("Administración de accesos"),
                     }[page]
                   }
                 </h1>
@@ -1113,6 +1121,7 @@ function App() {
                       settings: t(
                         "Idioma, conexión y conectores.",
                       ),
+                      access: t("Credenciales, permisos y rotación."),
                     }[page]
                   }
                 </p>
@@ -1181,7 +1190,7 @@ function App() {
                 </div>
               </div>
             )}
-            {page === "settings" ? (
+            {page === "access" ? <Access /> : page === "settings" ? (
               <div className="settings-grid">
                 <section className="card">
                   <h3>{t("Idioma")}</h3>
@@ -1230,7 +1239,6 @@ function App() {
                                   {
                                     projects: "Proyectos",
                                     fields: "Campos habilitados",
-                                    required_label: "Etiqueta requerida",
                                     repositories: "Repositorios",
                                   } as Record<string, string>
                                 )[name] ?? name,
@@ -1640,16 +1648,16 @@ function App() {
             {detailTitle === "Detalle del evento" && (
               <div className="info-box">
                 <p>
-                  {detail.payload_redacted_at
+                  {eventExclusionMessage(detail) ?? (detail.payload_redacted_at
                     ? t(
                         "El payload fue eliminado por retención y no puede ejecutarse.",
                       )
                     : t(
                         "Ejecutar evalúa las reglas activas para este evento; puede escribir en sistemas externos.",
-                      )}
+                      ))}
                 </p>
                 <button
-                  disabled={busy || !!detail.payload_redacted_at}
+                  disabled={busy || !!detail.payload_redacted_at || !!eventExclusionMessage(detail)}
                   onClick={() =>
                     void task(async () => {
                       if (

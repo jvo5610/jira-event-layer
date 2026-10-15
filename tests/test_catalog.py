@@ -79,7 +79,7 @@ def test_catalog_auth_and_redacted_exclusion(env):
     event = ingest(client)
     result = client.get('/v1/catalog').json()
     assert len([d for d in result['schema']['$defs'].values() if d.get('properties', {}).get('type', {}).get('const')]) == 8
-    assert cfg.admin_token not in str(result)
+    assert cfg.admin_bootstrap_token not in str(result)
     response = client.get('/v1/catalog/fields', params={'source': 'jira', 'event_type': 'jira:issue_updated'})
     assert response.status_code == 200
     assert response.json()['sample_count'] == 1

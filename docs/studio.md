@@ -1,21 +1,21 @@
-# Automation Studio
+# jira-relay-studio
 
 Consola opcional del motor `automation/v1`. Usa la misma API, reglas y worker que cualquier otro cliente. No crea tenants ni bases, no descubre infraestructura y no obtiene secretos desde proveedores cloud. Docker, Kubernetes, ECS, una VM o un proceso local son decisiones del operador.
 
 ## Contrato de ejecución
 
-El navegador consume `/api` en su propio origen. El gateway reenvía esas solicitudes al backend configurado, agrega su token del lado servidor y sirve los assets compilados. No se envían tokens de backend ni credenciales Jira/Bitbucket al navegador. Cambiar la configuración requiere reiniciar el gateway, **no recompilar la imagen**. No existe una configuración incorporada del entorno actual.
+El navegador consume `/api` en su propio origen. El gateway reenvía esas solicitudes al backend configurado, agrega su token del lado servidor y sirve los assets compilados. No se envían el token configurado del backend ni credenciales Jira/Bitbucket al navegador. La sección Accesos permite ingresar un administrador y muestra las nuevas credenciales una sola vez a ese administrador. Cambiar la configuración requiere reiniciar el gateway, **no recompilar la imagen**. No existe una configuración incorporada del entorno actual.
 
 | Variable | Uso |
 | --- | --- |
 | `STUDIO_BACKEND_URL` | URL HTTP(S) de la API de gestión accesible desde el gateway. Obligatoria; admite un prefijo de ruta. Sin credenciales, query ni fragmento. |
-| `STUDIO_BACKEND_TOKEN` / `STUDIO_BACKEND_TOKEN_FILE` | Token del backend, uno solo de los dos. Usar el rol mínimo necesario. |
+| `STUDIO_BACKEND_TOKEN` / `STUDIO_BACKEND_TOKEN_FILE` | Token delegado emitido por el administrador, con `api:read,rules:write,flows:operate` o un subconjunto. No usar el bootstrap. El valor directo tiene prioridad sobre el archivo. Se mantiene sólo en el servidor. |
 | `STUDIO_PUBLIC_ORIGIN` | Origen exacto visible en el navegador, con puerto si corresponde. Obligatorio. Sin ruta. |
 | `STUDIO_HOST` | Dirección de escucha. Proceso: `127.0.0.1`; imagen: `0.0.0.0`. |
 | `STUDIO_PORT` | Puerto de escucha del proceso; por defecto `8080`. |
 | `STUDIO_AUTH_MODE` | `basic` por defecto. `local` es una excepción explícita que exige bind y origen loopback. No funciona dentro del contenedor escuchando en todas las interfaces. |
 | `STUDIO_LOGIN_USERNAME` | Usuario de la consola, obligatorio en modo `basic`. |
-| `STUDIO_LOGIN_PASSWORD` / `STUDIO_LOGIN_PASSWORD_FILE` | Contraseña de la consola, mínimo 16 caracteres; elegir uno. No es el token del backend. |
+| `STUDIO_LOGIN_PASSWORD` / `STUDIO_LOGIN_PASSWORD_FILE` | Contraseña de la consola, mínimo 16 caracteres; el valor directo tiene prioridad sobre el archivo. Un valor vacío se rechaza sin fallback. No es el token del backend. |
 | `STUDIO_STATIC_DIR` | Directorio de assets; normalmente no hace falta cambiarlo. |
 
 Los secretos pueden ser archivos montados por cualquier plataforma. La aplicación no llama servicios de secretos ni comandos de despliegue. No acepta secretos en URLs. Una configuración incompleta o insegura impide arrancar, sin imprimir sus valores.
@@ -48,7 +48,7 @@ El backend debe existir y ser accesible en esa URL. Si la red requiere VPN, tún
 El contexto de build es la raíz del repositorio:
 
 ```sh
-docker build -f frontend/Dockerfile -t automation-studio:1.0.0 .
+docker build -f frontend/Dockerfile -t jira-relay-studio:1.0.0 .
 docker compose --env-file .env.studio -f compose.studio.yaml up -d
 ```
 
@@ -63,6 +63,34 @@ docker compose --profile studio up -d --build
 ```
 
 Ese ejemplo conecta servicios por el DNS de Compose `http://api:8080`. Se puede sobrescribir con `STUDIO_BACKEND_URL`; no es un destino compilado ni una dependencia de la aplicación.
+
+## Accesos: administración desde la GUI
+
+El login de la consola y el permiso de administrar credenciales son independientes. Entrar a **Accesos** e ingresar un token confirmado con `auth:admin`; no hay una variable de administrador adicional en el gateway. El token delegado usado para editar flujos no habilita esta sección.
+
+Desde allí se pueden listar credenciales, emitir una con nombre, permisos y vencimiento, revocar accesos y rotar el administrador o el token delegado de la GUI. Otorgar `auth:admin` requiere una elección explícita. `flows:operate` permite efectos reales sobre proveedores. La API impide revocar el último administrador confirmado vigente.
+
+Guardar cada token nuevo en el gestor de secretos antes de ocultarlo: no se puede recuperarlo desde el listado. El navegador lo mantiene temporalmente en memoria, no en almacenamiento local ni en URLs. No compartir capturas con el secreto visible.
+
+### Rotación administrativa
+
+1. Iniciar la rotación: se muestra el reemplazo una vez y su fecha límite.
+2. Guardarlo y actualizar los consumidores que usaban el anterior. La API no cambia archivos ni variables.
+3. Confirmar desde la GUI antes del plazo: se revoca el anterior y la sesión usa el nuevo.
+
+La ventana predeterminada de rotación es **una hora**. La sesión administrativa de la GUI dura **15 minutos absolutos**, no una hora. Si vence o se reinicia el gateway, ingresar el nuevo token y marcar la opción para confirmar una rotación pendiente. Esa acción revoca el anterior; no es una recuperación sin credencial. Si se perdió el reemplazo, un administrador vigente puede revocarlo e iniciar otra rotación.
+
+### Rotación del token de la GUI
+
+Iniciar la rotación del delegado desde Accesos, guardar el nuevo en la fuente de `STUDIO_BACKEND_TOKEN` o `STUDIO_BACKEND_TOKEN_FILE` y reiniciar el gateway según la plataforma. Volver a desbloquear Accesos y confirmar **después** de verificar que el gateway utiliza el nuevo. La GUI rechaza confirmar con la configuración anterior. No escribe secretos de Docker, Kubernetes, ECS ni del host.
+
+Si el delegado ya venció o fue revocado, un administrador puede entrar a Accesos, emitir otro y actualizar la configuración. Las demás pantallas no funcionarán hasta hacerlo. No montar un administrador como token de uso normal para resolverlo.
+
+### Sesión y despliegue
+
+El gateway conserva la credencial administrativa sólo en memoria del proceso; el navegador recibe una cookie opaca `HttpOnly`, `SameSite=Strict`, restringida a `/access`, con `Secure` en HTTPS. Revalida permisos contra la API en cada operación. Logout, vencimiento o reinicio eliminan la sesión. Hay un máximo de 32 sesiones por proceso, solicitudes administrativas de 32 KiB y respuestas de 1 MiB; los secretos no se registran en logs de acceso.
+
+Estas sesiones no tienen almacenamiento distribuido: usar un gateway o afinidad de sesión si hay réplicas; un reinicio sigue requiriendo desbloquear de nuevo. No equivalen a SSO ni a usuarios individuales. La ruta general `/api` bloquea la administración de credenciales, salvo la consulta de identidad; administrar requiere `/access` y su sesión independiente. Mantener controles de acceso y rate limiting en el ingreso.
 
 ## Kubernetes, ECS y otros orquestadores
 
@@ -81,9 +109,9 @@ No hace falta instalar AWS SDK, Docker CLI o Kubernetes CLI en la imagen.
 
 El modo predeterminado solicita autenticación HTTP Basic para la consola completa, configuración y API. Para un origen no loopback exige HTTPS declarado; el operador debe realmente terminar TLS y bloquear acceso directo al puerto interno. No alcanza con escribir una URL HTTPS si se expone además el puerto HTTP al público. Usar contraseña aleatoria y controles de acceso/rate limiting en la entrada. No se publicará automáticamente ningún servicio.
 
-Este es un acceso de operador único, no un sistema multiusuario con SSO, sesiones revocables o permisos individuales. La auditoría del backend identifica el rol de su token, no una identidad individual del navegador. Si esos requisitos son obligatorios para una instalación, **no queda habilitada para producción compartida hasta implementarlos**. No presentar el editor como un SaaS multiusuario terminado.
+Este es un acceso de operador único, no un sistema multiusuario con SSO o sesiones individuales. El backend permite revocar/rotar el token delegado de la GUI y audita su UUID, no la identidad individual del navegador. Si SSO o auditoría por usuario son obligatorios para una instalación, **no queda habilitada para producción compartida hasta implementarlos**. No presentar el editor como un SaaS multiusuario terminado.
 
-El gateway valida Host/Origin, bloquea peticiones cross-site, limita el cuerpo a 1 MiB y la respuesta a 8 MiB, usa tiempos de espera y pool acotado, no sigue redirects del backend, no reenvía cookies ni credenciales del navegador, no confía en proxies ambientales y no registra acceso con payloads/tokens. TLS del backend se valida normalmente. Nunca deshabilitar validación de certificados como mecanismo de instalación.
+El gateway valida Host/Origin, bloquea peticiones cross-site, limita el cuerpo de la API general a 10 MiB y la respuesta a 32 MiB, usa tiempos de espera y pool acotado, no sigue redirects del backend, no reenvía cookies ni credenciales del navegador, no confía en proxies ambientales y no registra acceso con payloads/tokens. La API debe configurarse con `MAX_BODY_BYTES=10485760` para aceptar el mismo máximo; puede reducirse para instalaciones más restrictivas. Los límites administrativos de `/access` siguen siendo menores. Estos máximos no sustituyen una prueba de carga ni los límites de memoria/concurrencia del despliegue. TLS del backend se valida normalmente. Nunca deshabilitar validación de certificados como mecanismo de instalación.
 
 ## Capacidades y rendimiento
 
@@ -99,9 +127,24 @@ El gateway valida Host/Origin, bloquea peticiones cross-site, limita el cuerpo a
 ## Verificación
 
 ```sh
-uv run --frozen pytest -q tests/test_studio_server.py tests/test_distribution.py
+uv run --frozen pytest -q tests/test_studio_server.py tests/test_studio_access.py tests/test_distribution.py
 npm --prefix frontend test
 npm --prefix frontend run build
+docker build -t automation-api:gui-check .
+docker build -f frontend/Dockerfile -t jira-relay-studio:gui-check .
+uv run --frozen python tools/smoke_studio.py --api-image automation-api:gui-check --studio-image jira-relay-studio:gui-check
 ```
 
-Los tests verifican autenticación, secretos por archivo, rechazo de configuración insegura, límites, headers y cambios de URL/origen sin rebuild. Las pruebas del motor con PostgreSQL requieren `TEST_DATABASE_URL` hacia una base de pruebas dedicada. No ejecutar una suite destructiva sobre una base operativa.
+Los tests verifican autenticación, secretos por archivo, rechazo de configuración insegura, límites, headers y cambios de URL/origen sin rebuild. Las pruebas del motor con PostgreSQL requieren `TEST_DB_HOST`, `TEST_DB_PORT`, `TEST_DB_NAME=automation_test`, `TEST_DB_USER` y `TEST_DB_PASSWORD` o `TEST_DB_PASSWORD_FILE`. No ejecutar una suite destructiva sobre una base operativa.
+
+`smoke_studio.py` crea una instalación Docker efímera real (PostgreSQL, API y GUI), comprueba emisión, revocación y rotaciones, y la elimina al terminar. No llama proveedores. `--serve` permite inspeccionarla antes de continuar; sus credenciales públicas de laboratorio están en `TEST_LOGIN`/`TEST_ADMIN` del script y sólo son aptas para ese entorno descartable, publicado en loopback. Esta aceptación no reemplaza una prueba de carga ni la validación del despliegue elegido.
+# Ayuda de acciones y resultados
+
+Al seleccionar una acción, abrí **? Cómo usar esta acción**. La ayuda enumera sus
+resultados y muestra rutas reales de los pasos anteriores del flujo actual.
+El paso visible 1 corresponde a `_steps["0"]`: para usar el ticket consultado
+allí, elegí **Datos** y `_steps["0"].key`; para su resumen,
+`_steps["0"].fields.summary`. En **Plantilla**, usá por ejemplo
+`Ticket: ${_steps["0"].key}`. `issue.fields` sigue siendo el evento original.
+Los resultados solo están disponibles después de ejecutar el paso correspondiente.
+Una descripción ADF es un objeto: interpolarla como texto no implementa un append.

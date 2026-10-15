@@ -54,6 +54,7 @@ actions:
     require: {path: fields.status.id, op: eq, value: "10001"}
   - type: jira.issue.transition
     issue: '${_steps["5"].key}'
+    from_status_id: "10000"
     to_status_id: "10001"
   - type: jira.issue.get
     issue: '${_steps["5"].key}'
