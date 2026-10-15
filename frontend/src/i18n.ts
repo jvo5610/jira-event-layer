@@ -41,6 +41,9 @@ export function t(text: string, values: Record<string, string | number> = {}) {
 
 // The source key remains stable. Copy is intentionally short; data and DSL identifiers are not translated.
 export const messages: Record<string, [string, string]> = {
+  "Agregar al final de la descripción": ["Agregar al final de la descripción", "Append to description"],
+  "Agrega un párrafo sin reemplazar el contenido ni su formato. Si la descripción está vacía, la crea.": ["Agrega un párrafo sin reemplazar el contenido ni su formato. Si la descripción está vacía, la crea.", "Adds a paragraph without replacing the existing content or its formatting. Creates the description when empty."],
+  "Para agregar texto conservando el formato, usá Agregar al final de la descripción; no concatenes un objeto ADF en una plantilla.": ["Para agregar texto conservando el formato, usá Agregar al final de la descripción; no concatenes un objeto ADF en una plantilla.", "To append text while preserving formatting, use Append to description; do not concatenate an ADF object in a template."],
   "Para mezclar texto y datos, escribí el texto con referencias. Por ejemplo:": ["Para mezclar texto y datos, escribí el texto con referencias. Por ejemplo:", "To combine text and data, enter text with references. For example:"],
   "Acciones anteriores": ["Acciones anteriores", "Previous actions"],
   "Datos del evento": ["Datos del evento", "Event data"],

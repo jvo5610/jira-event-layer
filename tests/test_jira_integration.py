@@ -58,6 +58,40 @@ def test_create_then_comment_reuses_durable_step_result(env):
     assert [r.method for r in requests] == ["POST", "GET", "POST"]
 
 
+@pytest.mark.parametrize('description',[None,{'type':'doc','version':1,'content':[{'type':'paragraph','content':[{'type':'text','text':'Keep formatting','marks':[{'type':'strong'}]}]}]}])
+def test_assignment_append_worker_and_service_echo_exclusion(env,description):
+    from test_safety import assignment_change, PROJECT
+    client,store,settings=env
+    cfg=config();settings.jira_token=cfg.jira_token;settings.jira_cloud_id=cfg.jira_cloud_id
+    store.remember_jira_actor(settings,'relay-fixture')
+    current=issue('KAN-45');current['fields']['description']=copy.deepcopy(description)
+    writes=[]
+    def provider(request):
+        if request.method=='GET': return httpx.Response(200,json=copy.deepcopy(current))
+        writes.append(json.loads(request.content));current['fields'].update(writes[-1]['fields'])
+        return httpx.Response(204)
+    rule={'apiVersion':'automation/v1','kind':'Rule','name':'assignment-append',
+          'trigger':{'source':'jira','event':'jira:issue_updated'},'when':{'all':[PROJECT,assignment_change()]},
+          'actions':[{'type':'jira.issue.edit','issue':{'path':'issue.key'},'append_description':'Se asigno!'}]}
+    activate(client,yaml.safe_dump(rule))
+    worker=Worker(store,settings,jira=Jira(settings,httpx.Client(transport=httpx.MockTransport(provider))))
+    for number,person in enumerate(['person-1','person-2']):
+        payload={'issue':issue('KAN-45'),'changelog':{'items':[{'fieldId':'assignee','to':person}]}}
+        event=ingest_event(client,key=f'assignment-{number}',payload=payload)
+        assert len(event['runs'])==1 and worker.tick()
+        assert client.get('/v1/runs/'+event['runs'][0]['id']).json()['status']=='succeeded'
+        assert ingest_event(client,key=f'assignment-{number}',payload=payload)['duplicate']
+        echo=ingest_event(client,key=f'echo-{number}',payload={**payload,'user':{'accountId':'relay-fixture'}})
+        assert echo['ignored_reason']=='ignored_service_actor' and not echo['runs']
+    assert len(writes)==2
+    paragraphs=current['fields']['description']['content']
+    assert [p['content'][0]['text'] for p in paragraphs[-2:]]==['Se asigno!','Se asigno!']
+    if description is not None: assert paragraphs[:-2]==description['content']
+    unassigned=ingest_event(client,key='unassignment',payload={'issue':issue('KAN-45'),
+        'changelog':{'items':[{'fieldId':'assignee','to':None}]}})
+    assert not unassigned['runs'] and not worker.tick()
+
+
 @pytest.mark.parametrize("mode", ["timeout", "500", "invalid_response"])
 def test_ambiguous_jira_write_stays_in_review_and_cannot_use_bitbucket_reconcile(env, mode):
     requests = []

@@ -1,6 +1,7 @@
 """Bounded Jira REST v3 adapter. No arbitrary URL, scripts, bulk writes or blind retries."""
 import json
 import re
+from copy import deepcopy
 from uuid import UUID
 
 import httpx
@@ -72,6 +73,21 @@ def adf(text):
         raise RuleError("jira_text_invalid")
     return {"type": "doc", "version": 1, "content": [
         {"type": "paragraph", "content": [{"type": "text", "text": text}]}]}
+
+
+def append_description(original, text):
+    paragraph = adf(text)['content'][0]
+    if original is None:
+        document = {'type':'doc','version':1,'content':[]}
+    elif isinstance(original, str):
+        document = adf(original) if original.strip() else {'type':'doc','version':1,'content':[]}
+    elif (isinstance(original, dict) and original.get('type') == 'doc'
+          and original.get('version') == 1 and isinstance(original.get('content'), list)):
+        document = deepcopy(original)
+    else:
+        raise RuleError('jira_description_invalid')
+    document['content'].append(paragraph)
+    return document
 
 
 class Jira:
@@ -226,6 +242,11 @@ class Jira:
             return {"key": key, "fields": issue["fields"], "guard_matched": True}
         if kind == "jira.issue.edit":
             fields = self.fields(action.fields, payload)
+            if action.append_description is not None:
+                if 'description' not in issue['fields']:
+                    raise RuleError('jira_description_missing')
+                fields['description'] = append_description(issue['fields']['description'], bind(action.append_description, payload))
+                self.validate_fields(fields)
             self.check_protected_labels(fields, issue)
             if all(issue["fields"].get(k, MISSING) == v for k, v in fields.items()):
                 return {"key": key, "no_change": True}

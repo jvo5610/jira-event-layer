@@ -213,11 +213,15 @@ class JiraClone(JiraCreate):
 class JiraEdit(JiraFields):
     type: Literal["jira.issue.edit"]
     issue: TextBinding
+    append_description: TextBinding | None = Field(default=None, exclude_if=lambda value: value is None,
+        description="Append a text paragraph to the current Jira description, preserving ADF. Null descriptions start empty. Cannot be combined with fields.description.")
 
     @model_validator(mode="after")
     def not_empty(self):
-        if not self.fields:
-            raise ValueError("At least one field is required")
+        if not self.fields and self.append_description is None:
+            raise ValueError("At least one field or append_description is required")
+        if self.append_description is not None and 'description' in self.fields:
+            raise ValueError("Choose fields.description replacement or append_description, not both")
         return self
 
 

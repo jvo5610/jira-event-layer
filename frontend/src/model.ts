@@ -31,6 +31,7 @@ export const actionLabels: Record<string, string> = {
 };
 export const labels: Record<string, string> = {
   issue: "Ticket",
+  append_description: "Agregar al final de la descripción",
   source: "Ticket de origen",
   project: "Proyecto",
   issue_type_id: "ID del tipo de ticket",

@@ -779,6 +779,11 @@ export function ActionEditor({
             return <SingleValueEditor key={key} label={key === "issue" ? (action.type === "jira.issue.edit" ? "Ticket a editar" : "Ticket") : labels[key] ?? key}
               value={action[key]} target suggestions={suggestions} onChange={v => set(key, v)}
               onRemove={!definition.required?.includes(key) ? () => { const next = {...action}; delete next[key]; onChange(next); } : undefined} />;
+          if (key === "append_description") return action[key] == null
+            ? <button className="text-button" key={key} onClick={() => set(key, {value:""})}><Plus size={14} />{t("Agregar al final de la descripción")}</button>
+            : <section key={key}><SingleValueEditor label="Agregar al final de la descripción" value={action[key]} suggestions={suggestions}
+                onChange={v => set(key, v)} onRemove={() => {const next={...action}; delete next[key]; onChange(next);}} />
+                <small className="muted">{t("Agrega un párrafo sin reemplazar el contenido ni su formato. Si la descripción está vacía, la crea.")}</small></section>;
           if (key === "require")
             return (
               <section key={key}>

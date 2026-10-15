@@ -56,7 +56,18 @@ def change_scope(node):
     value = lambda n: positive(n, {('from',), ('to',), ('fromString',), ('toString',)},
                                lambda v: v is None or type(v) in {str, int, bool})
     # Both guarantees must refer to the SAME changed item, not two independent some clauses.
-    return guaranteed(where, field) and guaranteed(where, value)
+    finite_change = guaranteed(where, field) and guaranteed(where, value)
+    # Assignment to ANY person is specific without hardcoding account IDs. Keep
+    # every condition on the SAME changelog item and exclude missing/null/empty to.
+    assignee = lambda n: positive(n, {('field',), ('fieldId',)}, lambda v: v == 'assignee')
+    def to_check(n, op, expected):
+        return ('path' in n and path_keys(n['path']) == ('to',) and n.get('op') == op
+                and n.get('value', True) == expected and type(n.get('value', True)) is type(expected))
+    assignment = (guaranteed(where, assignee)
+                  and guaranteed(where, lambda n: to_check(n, 'exists', True))
+                  and guaranteed(where, lambda n: to_check(n, 'ne', None))
+                  and guaranteed(where, lambda n: to_check(n, 'ne', '')))
+    return finite_change or assignment
 
 
 def target_is_bounded(binding, index, actions):
@@ -96,7 +107,7 @@ def validate_safety(rule):
     if not guaranteed(rule.when, lambda n: source_scope(n, rule.trigger.source)):
         raise RuleError('unsafe_write_scope: every matching branch must constrain issue.key or issue.fields.project.key/id with eq or nonempty in')
     if rule.trigger.event == 'jira:issue_updated' and not guaranteed(rule.when, change_scope):
-        raise RuleError('unsafe_change_scope: issue_updated writes require some changelog.items with a positive field/fieldId and from/to/fromString/toString condition in the same where')
+        raise RuleError('unsafe_change_scope: issue_updated writes require some changelog.items with a positive field/fieldId and from/to/fromString/toString condition in the same where; assignee accepts to exists, ne null and ne empty string together')
     for index, action in enumerate(rule.actions):
         if action.type == 'jira.issue.transition' and (action.from_status_id is None or action.from_status_id == action.to_status_id):
             raise RuleError(f'unsafe_transition: action {index} requires distinct from_status_id and to_status_id')

@@ -350,6 +350,17 @@ requeridos por la aplicación. Verificar IDs y permisos propios antes de activar
 - jira.issue.link: vincular dos tarjetas administradas mediante un ID de tipo de vínculo.
 - jira.issue.get: leer la tarjeta actual y, opcionalmente, detener la secuencia si no cumple require.
 
+`jira.issue.edit` también admite `append_description: {value: "Se asigno!"}`:
+lee la descripción actual de Jira y agrega un párrafo conservando su documento ADF,
+en lugar de concatenar el snapshot del evento. Una descripción null se crea vacía;
+si Jira omite el campo o devuelve un formato desconocido, falla sin escribir.
+Puede combinarse con otros `fields`, pero no con `fields.description` (reemplazo).
+El texto tiene el límite del conector y el documento final el límite de 32 KB.
+Es una lectura seguida de una edición, no un append atómico de Jira: una edición
+concurrente entre ambas puede competir con esta escritura, igual que los demás edits.
+No se reintentan a ciegas escrituras ambiguas. Ver
+[flujo de asignación](examples/jira-assignment-append.yaml), guardado sin activación automática.
+
 Resultados de pasos previos: `_steps["0"].key`, `_steps["1"].fields.status.id`, etc. `_steps`
 es un objeto de resultados por clave numérica, no una lista: el paso visible 1 usa la clave `"0"`.
 El contexto lo construye el worker
@@ -480,6 +491,9 @@ borrador sigue permitido, pero **activarlo exige superar estos controles**:
 - Si el trigger es `jira:issue_updated`, debe existir un `some` positivo sobre `changelog.items`
   cuyo **mismo `where`** garantice `field`/`fieldId` y una comparación positiva `eq`/`in` sobre
   `from`, `to`, `fromString` o `toString`. La mera presencia del changelog o del campo no alcanza.
+  El caso específico **asignar a cualquier persona** admite `fieldId`/`field = assignee`
+  con `to exists true`, `to ne null` y `to ne ""`, todos garantizados en ese mismo `where`.
+  Así no se hardcodean account IDs: asignar y reasignar coinciden, desasignar no.
 - Una transición necesita `from_status_id` y `to_status_id` distintos. Se comprueba el estado
   actual antes del envío, aunque Jira puede cambiar concurrentemente después de esa lectura.
 - Los destinos de acciones Jira deben ser una clave literal (incluido cross-project) o una

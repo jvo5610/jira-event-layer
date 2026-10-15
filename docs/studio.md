@@ -158,6 +158,18 @@ controles técnicos siguen disponibles en **Opciones avanzadas**. El destino deb
 resolver a una única clave Jira; no acepta listas, JQL, IDs numéricos, referencias
 futuras ni un fallback que pueda editar otro ticket si falta el dato esperado.
 
+Para **sumar** texto, usá **Agregar al final de la descripción** en la acción Editar
+ticket. Por ejemplo `Se asigno!` crea un nuevo párrafo y conserva el contenido/formato
+actual de Jira; no requiere cargar un `fields.description` ni una acción de consulta
+previa. Funciona con descripciones vacías. No combines agregado y reemplazo del mismo
+campo. Como es lectura seguida de escritura, no garantiza un append atómico frente
+a ediciones concurrentes de otras personas o integraciones.
+
+Para dispararlo al asignar a alguien, el filtro de `changelog.items` debe exigir en
+un mismo elemento `fieldId = assignee`, `to` existente, distinto de null y distinto de
+texto vacío. No exige una lista fija de personas. La desasignación no coincide; las
+reasignaciones sí. Los eventos de la cuenta del servicio siguen excluidos globalmente.
+
 ## Contexto y ejemplos de pasos anteriores
 
 Los selectores separan **Acciones anteriores** y **Datos del evento** y muestran
@@ -187,3 +199,4 @@ allí, abrí `{ }` y elegí `_steps["0"].key`; para su resumen,
 `Ticket: ${_steps["0"].key}`. `issue.fields` sigue siendo el evento original.
 Los resultados solo están disponibles después de ejecutar el paso correspondiente.
 Una descripción ADF es un objeto: interpolarla como texto no implementa un append.
+Usá la operación explícita **Agregar al final de la descripción** para conservarla.

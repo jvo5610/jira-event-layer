@@ -8,10 +8,77 @@ import yaml
 
 from app.config import Settings
 from app.dsl import Rule, RuleError, parse_rule
-from app.jira import AmbiguousWrite, ExecutionIdentity, Jira, PreflightRetry, WriteRateLimited
+from app.jira import AmbiguousWrite, ExecutionIdentity, Jira, PreflightRetry, WriteRateLimited, append_description
 
 IDENTITY = ExecutionIdentity(rule_name="crear-repositorio", rule_version=2, rule_sha256="a" * 64,
                              run_id=UUID("11111111-1111-4111-8111-111111111111"), step=0)
+
+
+@pytest.mark.parametrize('original',[None,'', 'Existing text',
+    {'type':'doc','version':1,'content':[{'type':'paragraph','content':[{'type':'text','text':'Rich','marks':[{'type':'strong'}]}]}]}])
+def test_append_description_keeps_existing_content_and_supports_empty(original):
+    before=copy.deepcopy(original)
+    result=append_description(original,'Se asigno!')
+    assert result['content'][-1]=={'type':'paragraph','content':[{'type':'text','text':'Se asigno!'}]}
+    if isinstance(original,dict): assert result['content'][:-1]==original['content']
+    if original=='Existing text': assert result['content'][0]['content'][0]['text']==original
+    assert original==before
+
+
+@pytest.mark.parametrize('original',[[],42,{'type':'doc','version':2,'content':[]},{'type':'doc','version':1,'content':{}}])
+def test_append_description_rejects_unrecognized_document(original):
+    with pytest.raises(RuleError,match='jira_description_invalid'):
+        append_description(original,'Se asigno!')
+
+
+def test_append_action_fetches_current_description_and_does_not_use_stale_webhook_text():
+    original={'type':'doc','version':1,'content':[{'type':'paragraph','content':[{'type':'text','text':'Current rich text','marks':[{'type':'strong'}]}]}]}
+    writes=[];reservations=[]
+    def provider(request):
+        if request.method=='GET':
+            current=issue();current['fields']['description']=copy.deepcopy(original)
+            return httpx.Response(200,json=current)
+        writes.append(json.loads(request.content));return httpx.Response(204)
+    adapter=Jira(config(),httpx.Client(transport=httpx.MockTransport(provider)))
+    action=rule_for([{'type':'jira.issue.edit','issue':{'path':'issue.key'},'append_description':'Se asigno!'}]).actions[0]
+    result=adapter.execute(action,{'issue':{'key':'DEMO-4','fields':{'description':'STALE'}}},IDENTITY,lambda:reservations.append(True))
+    assert result=={'key':'DEMO-4','updated_fields':['description']}
+    assert writes==[{'fields':{'description':append_description(original,'Se asigno!')}}] and reservations==[True]
+
+
+def test_description_replacement_and_append_are_mutually_exclusive():
+    with pytest.raises(RuleError,match='not both'):
+        rule_for([{'type':'jira.issue.edit','issue':'DEMO-4','append_description':'Se asigno!',
+                   'fields':{'description':'Replacement'}}])
+
+
+def test_optional_append_does_not_change_serialization_of_existing_edit_rules():
+    rule=rule_for([{'type':'jira.issue.edit','issue':'DEMO-4','fields':{'summary':'Existing'}}])
+    assert 'append_description' not in rule.model_dump()['actions'][0]
+
+
+def test_missing_current_description_does_not_silently_replace_unknown_content():
+    def provider(request):
+        assert request.method=='GET'
+        current=issue();del current['fields']['description']
+        return httpx.Response(200,json=current)
+    adapter=Jira(config(),httpx.Client(transport=httpx.MockTransport(provider)))
+    action=rule_for([{'type':'jira.issue.edit','issue':'DEMO-4','append_description':'Se asigno!'}]).actions[0]
+    with pytest.raises(RuleError,match='jira_description_missing'):
+        adapter.execute(action,{},IDENTITY,lambda:pytest.fail('No write reservation'))
+
+
+@pytest.mark.parametrize('suffix',['', '   ', 'x'*8001])
+def test_invalid_append_text_has_no_mutation_or_reservation(suffix):
+    calls=[]
+    def provider(request):
+        calls.append(request.method)
+        assert request.method=='GET'
+        return httpx.Response(200,json=issue())
+    adapter=Jira(config(),httpx.Client(transport=httpx.MockTransport(provider)))
+    action=rule_for([{'type':'jira.issue.edit','issue':'DEMO-4','append_description':{'path':'suffix'}}]).actions[0]
+    with pytest.raises(RuleError): adapter.execute(action,{'suffix':suffix},IDENTITY,lambda:pytest.fail('No reservation'))
+    assert calls==['GET']
 
 
 def config():

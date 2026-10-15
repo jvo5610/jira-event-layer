@@ -22,7 +22,7 @@ export function ActionHelpContent({ actions, index }: { actions: Obj[]; index: n
       <pre>{previous >= 0 ? `Ticket: ${'${'}_steps["${previous}"].key}` : `Resultado: ${'${'}_steps["${index - 1}"].${actionOutputKeys[actions[index - 1].type]?.[0] ?? "result"}}`}</pre>
     </>}
     <p>{t("Paso 1 corresponde a _steps[\"0\"], paso 2 a _steps[\"1\"]. issue.fields siempre lee el evento original, no los cambios de una acción anterior.")}</p>
-    <p className="muted">{t("La descripción de Jira puede ser un objeto ADF, no texto. No la concatènes en una plantilla: eso no conserva su formato ni agrega un párrafo.")}</p>
+    <p className="muted">{t("Para agregar texto conservando el formato, usá Agregar al final de la descripción; no concatenes un objeto ADF en una plantilla.")}</p>
   </div>;
 }
 

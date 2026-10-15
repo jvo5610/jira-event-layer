@@ -8,6 +8,13 @@ const render = (overrides: Partial<Suggestion> = {}) => renderToStaticMarkup(
   <SuggestionDetails suggestion={{path: "issue.fields.status.name", types: ["null", "string"], ...overrides}} />,
 );
 describe("Observed field examples", () => {
+  it("offers an explicit append description operation without an empty fields requirement in the UI", () => {
+    const html=renderToStaticMarkup(<ActionEditor action={{type:'jira.issue.edit',issue:{path:'issue.key'},fields:{},append_description:{value:'Se asigno!'}}}
+      definition={{properties:{issue:{},fields:{},append_description:{}},required:['issue']}} suggestions={[]} onChange={()=>{}} />);
+    expect(html).toContain('Agregar al final de la descripción');
+    expect(html).toContain('Se asigno!');
+    expect(html).toContain('sin reemplazar el contenido');
+  });
   it("suggests issue-key values, not observed dates, status names or structured outputs as edit targets", () => {
     expect(isIssueTargetSuggestion({path:'issue.fields.parent.key',types:['null']})).toBe(true);
     expect(isIssueTargetSuggestion({path:'issue.fields.customfield_10090',types:['string'],example_state:'present',example_kind:'value',example:'OPS-42'})).toBe(true);

@@ -123,6 +123,39 @@ def test_created_event_requires_scope_but_not_changelog():
     validate_safety(Rule.model_validate(raw))
 
 
+def assignment_change():
+    return {'some':{'path':'changelog.items','where':{'all':[
+        {'path':'fieldId','op':'eq','value':'assignee'},
+        {'path':'to','op':'exists','value':True},
+        {'path':'to','op':'ne','value':None},
+        {'path':'to','op':'ne','value':''}]}}}
+
+
+def test_assignment_to_any_person_is_specific_without_account_allowlist():
+    from app.dsl import match
+    raw=spec(); raw['when']={'all':[PROJECT,assignment_change()]}
+    raw['actions']=[{'type':'jira.issue.edit','issue':{'path':'issue.key'},'append_description':{'value':'Se asigno!'}}]
+    rule=Rule.model_validate(raw); validate_safety(rule)
+    for changed,expected in [({'fieldId':'assignee','to':'person-1'},True),
+                             ({'fieldId':'assignee','from':'person-2','to':'person-1'},True),
+                             ({'fieldId':'assignee','to':None},False),
+                             ({'fieldId':'assignee','to':''},False),
+                             ({'fieldId':'assignee'},False),
+                             ({'fieldId':'status','to':'10003'},False)]:
+        payload={'issue':{'key':'KAN-1','fields':{'project':{'key':'KAN'}}},'changelog':{'items':[changed]}}
+        assert match(rule,'jira','jira:issue_updated',payload)['matched'] is expected
+    payload['changelog']['items']=[{'fieldId':'assignee','to':None},{'fieldId':'status','to':'10003'}]
+    assert not match(rule,'jira','jira:issue_updated',payload)['matched']
+
+
+@pytest.mark.parametrize('missing',range(4))
+def test_incomplete_any_person_guard_is_rejected(missing):
+    raw=spec(); change=assignment_change();del change['some']['where']['all'][missing]
+    raw['when']={'all':[PROJECT,change]}
+    with pytest.raises(RuleError,match='unsafe_change_scope'):
+        validate_safety(Rule.model_validate(raw))
+
+
 def test_test_source_is_not_a_blanket_safety_exemption():
     raw = spec()
     raw['trigger'] = {'source': 'test', 'event': 'run'}
