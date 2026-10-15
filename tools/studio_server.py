@@ -1,123 +1,229 @@
-"""Local static editor + private API tunnel. Never exposes credentials to the browser."""
+"""Portable ASGI gateway. Networking and secret delivery belong to the operator."""
 import argparse
-import functools
-import gzip
-import json
-import signal
-import socket
-import subprocess
-import threading
-import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import base64
+import binascii
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+import hmac
+import ipaddress
+import os
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
 
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse, Response
+from starlette.middleware.gzip import GZipMiddleware
 import httpx
+import uvicorn
 
 
-class Gateway(ThreadingHTTPServer):
-    daemon_threads = True
-
-    def __init__(self, address, root, upstream, token, environment='Fett'):
-        self.root = Path(root).resolve()
-        self.upstream = upstream.rstrip('/')
-        self.client = httpx.Client(timeout=httpx.Timeout(20, connect=5), follow_redirects=False)
-        self.token = token
-        self.environment = environment
-        super().__init__(address, Handler)
-
-    def server_close(self):
-        self.client.close()
-        super().server_close()
+def secret(env, name):
+    direct, filename = env.get(name, ''), env.get(name + '_FILE', '')
+    if direct and filename:
+        raise ValueError(f'Set only {name} or {name}_FILE')
+    value = Path(filename).read_text().rstrip('\r\n') if filename else direct
+    if not value or any(ord(c) < 32 or ord(c) > 126 for c in value):
+        raise ValueError(f'{name} is required and must contain printable ASCII')
+    return value
 
 
-class Handler(BaseHTTPRequestHandler):
-    def log_message(self, *_):
-        pass  # No tokens, queries or payloads in access logs.
+def loopback(host):
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host == 'localhost'
 
-    def reply(self, status, data, content_type='application/json', immutable=False):
-        if not isinstance(data, bytes): data=json.dumps(data,ensure_ascii=False).encode()
-        self.send_response(status)
-        self.send_header('Content-Type', content_type)
-        self.send_header('Cache-Control','public, max-age=31536000, immutable' if immutable else 'no-store')
-        self.send_header('X-Content-Type-Options','nosniff')
-        self.send_header('Referrer-Policy','no-referrer')
-        self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
-        if len(data)>512 and 'gzip' in self.headers.get('Accept-Encoding',''):
-            data=gzip.compress(data);self.send_header('Content-Encoding','gzip');self.send_header('Vary','Accept-Encoding')
-        self.send_header('Content-Length',str(len(data)));self.end_headers()
-        if self.command!='HEAD': self.wfile.write(data)
 
-    def handle_request(self):
-        port=self.server.server_address[1]
-        hosts={f'127.0.0.1:{port}',f'localhost:{port}'}
-        origins={'http://'+host for host in hosts}
-        if self.headers.get('Host') not in hosts or self.headers.get('Origin','') not in origins|{''} or self.headers.get('Sec-Fetch-Site','')=='cross-site':
-            return self.reply(403,{'detail':'This editor only accepts requests from its local address.'})
-        path=urlsplit(self.path).path
-        if path=='/studio-config' and self.command=='GET':
-            return self.reply(200,{'environment':self.server.environment,'mode':'remote','api':'infra/jira-event-layer-api','authentication':'local administrator gateway'})
-        if path.startswith('/api/'):
-            route=self.path[4:]
-            if not (path.startswith('/api/v1/') or path in {'/api/metrics','/api/readyz','/api/healthz'}): return self.reply(404,{'detail':'Not found'})
-            if self.command not in {'GET','POST'}: return self.reply(405,{'detail':'Method not allowed'})
-            try: size=int(self.headers.get('Content-Length','0'))
-            except ValueError: return self.reply(400,{'detail':'Invalid content length'})
-            if size<0 or size>1048576 or self.headers.get('Transfer-Encoding'): return self.reply(413,{'detail':'Body exceeds the configured limit'})
-            headers={'Authorization':'Bearer '+self.server.token,'Content-Type':self.headers.get('Content-Type','application/json')}
-            if self.headers.get('Idempotency-Key'):headers['Idempotency-Key']=self.headers['Idempotency-Key']
-            try:
-                response=self.server.client.request(self.command,self.server.upstream+route,headers=headers,content=self.rfile.read(size) if size else None)
-                return self.reply(response.status_code,response.content,response.headers.get('Content-Type','application/json'))
-            except httpx.HTTPError:
-                return self.reply(502,{'detail':'The private API connection is unavailable. Check the Fett tunnel.'})
-        if self.command not in {'GET','HEAD'}:return self.reply(405,{'detail':'Method not allowed'})
-        relative=unquote(path).lstrip('/') or 'index.html'
-        target=(self.server.root/relative).resolve()
-        if not target.is_relative_to(self.server.root):return self.reply(404,{'detail':'Not found'})
-        if not target.is_file():
-            if path.startswith('/assets/'):return self.reply(404,{'detail':'Not found'})
-            target=self.server.root/'index.html'
-        if not target.is_file():return self.reply(503,{'detail':'Build the frontend first: cd frontend && npm run build'})
-        types={'.html':'text/html; charset=utf-8','.js':'application/javascript','.css':'text/css','.svg':'image/svg+xml','.png':'image/png'}
-        return self.reply(200,target.read_bytes(),types.get(target.suffix,'application/octet-stream'),immutable=path.startswith('/assets/'))
+def endpoint(value, *, origin=False):
+    parsed = urlsplit(value)
+    try:
+        valid_port = parsed.port is None or 0 < parsed.port < 65536
+    except ValueError:
+        valid_port = False
+    if (parsed.scheme not in {'http', 'https'} or not parsed.hostname or not valid_port
+            or parsed.username or parsed.password or '?' in value or '#' in value
+            or any(c.isspace() or ord(c) < 32 for c in value)
+            or '\\' in value or (origin and parsed.path not in {'', '/'})):
+        raise ValueError('Expected an HTTP(S) URL without credentials, query or fragment')
+    return value.rstrip('/')
 
-    do_GET=handle_request
-    do_HEAD=handle_request
-    do_POST=handle_request
-    do_PUT=handle_request
-    do_DELETE=handle_request
-    do_OPTIONS=handle_request
+
+@dataclass(frozen=True)
+class Settings:
+    backend_url: str
+    public_origin: str
+    backend_token: str = field(repr=False)
+    auth_mode: str = 'basic'
+    username: str = ''
+    password: str = field(default='', repr=False)
+    host: str = '127.0.0.1'
+    port: int = 8080
+    root: Path = Path(__file__).resolve().parents[1] / 'frontend' / 'dist'
+
+    @classmethod
+    def from_env(cls, env=None):
+        env = os.environ if env is None else env
+        host = env.get('STUDIO_HOST', '127.0.0.1')
+        port = int(env.get('STUDIO_PORT', '8080'))
+        if not 0 < port < 65536:
+            raise ValueError('STUDIO_PORT must be between 1 and 65535')
+        backend = endpoint(env.get('STUDIO_BACKEND_URL', ''))
+        origin = endpoint(env.get('STUDIO_PUBLIC_ORIGIN', ''), origin=True)
+        mode = env.get('STUDIO_AUTH_MODE', 'basic')
+        if mode not in {'basic', 'local'}:
+            raise ValueError('STUDIO_AUTH_MODE must be basic or local')
+        if mode == 'local' and (not loopback(host) or not loopback(urlsplit(origin).hostname)):
+            raise ValueError('Local access requires a loopback bind address and public origin')
+        username = env.get('STUDIO_LOGIN_USERNAME', '')
+        password = secret(env, 'STUDIO_LOGIN_PASSWORD') if mode == 'basic' else ''
+        if mode == 'basic':
+            if not username or ':' in username or not username.isascii() or any(ord(c) < 32 for c in username):
+                raise ValueError('STUDIO_LOGIN_USERNAME is required and must be a valid Basic username')
+            if urlsplit(origin).scheme != 'https' and not loopback(urlsplit(origin).hostname):
+                raise ValueError('Shared access requires HTTPS at STUDIO_PUBLIC_ORIGIN')
+            if len(password) < 16:
+                raise ValueError('STUDIO_LOGIN_PASSWORD must contain at least 16 characters')
+        return cls(backend, origin, secret(env, 'STUDIO_BACKEND_TOKEN'), mode, username,
+                   password, host, port, Path(env.get('STUDIO_STATIC_DIR', str(cls.root))).resolve())
+
+
+def authorized(header, settings):
+    try:
+        scheme, encoded = header.split(' ', 1)
+        decoded = base64.b64decode(encoded, validate=True).decode('ascii')
+        username, password = decoded.split(':', 1)
+        user_ok = hmac.compare_digest(username, settings.username)
+        pass_ok = hmac.compare_digest(password, settings.password)
+        return scheme.lower() == 'basic' and user_ok and pass_ok
+    except (ValueError, UnicodeError, binascii.Error):
+        return False
+
+
+def create_app(settings, *, transport=None):
+    root = settings.root.resolve()
+    if not (root / 'index.html').is_file():
+        raise ValueError('STUDIO_STATIC_DIR must contain the compiled frontend')
+
+    @asynccontextmanager
+    async def lifespan(app):
+        async with httpx.AsyncClient(timeout=httpx.Timeout(20, connect=5), follow_redirects=False,
+                                     trust_env=False, transport=transport,
+                                     limits=httpx.Limits(max_connections=50, max_keepalive_connections=10)) as client:
+            app.state.client = client
+            yield
+
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    app.add_middleware(GZipMiddleware, minimum_size=512, compresslevel=5)
+
+    @app.middleware('http')
+    async def security(request, call_next):
+        path = request.url.path
+        if path in {'/healthz', '/readyz'}:
+            response = await call_next(request)
+        elif (request.headers.get('host', '').lower() != urlsplit(settings.public_origin).netloc.lower()
+              or request.headers.get('origin', '') not in {'', settings.public_origin}
+              or request.headers.get('sec-fetch-site') == 'cross-site'):
+            response = JSONResponse({'detail': 'Request origin is not allowed'}, status_code=403)
+        elif settings.auth_mode == 'basic' and not authorized(request.headers.get('authorization', ''), settings):
+            response = JSONResponse({'detail': 'Authentication required'}, status_code=401,
+                                    headers={'WWW-Authenticate': 'Basic realm="Automation", charset="UTF-8"'})
+        else:
+            response = await call_next(request)
+        response.headers['Cache-Control'] = ('public, max-age=31536000, immutable'
+            if path.startswith('/assets/') and response.status_code == 200 else 'no-store')
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['Referrer-Policy'] = 'no-referrer'
+        response.headers['Content-Security-Policy'] = ("default-src 'self'; script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; "
+            "frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        return response
+
+    @app.get('/healthz')
+    async def health():
+        return {'status': 'ok'}
+
+    @app.get('/readyz')
+    async def ready(request: Request):
+        try:
+            result = await request.app.state.client.get(settings.backend_url + '/readyz',
+                headers={'Authorization': 'Bearer ' + settings.backend_token})
+            good = result.status_code == 200
+        except httpx.HTTPError:
+            good = False
+        return JSONResponse({'status': 'ready' if good else 'unavailable'}, status_code=200 if good else 503)
+
+    @app.get('/runtime-config')
+    async def runtime_config():
+        return {'backend_url': settings.backend_url, 'api_path': '/api', 'auth_mode': settings.auth_mode}
+
+    @app.api_route('/api/{path:path}', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'])
+    async def proxy(path: str, request: Request):
+        route = '/' + path
+        if (not (route.startswith('/v1/') or route in {'/metrics', '/readyz', '/healthz'})
+                or any(p in {'.', '..'} for p in path.split('/')) or '\\' in path):
+            return JSONResponse({'detail': 'Not found'}, status_code=404)
+        if request.method not in {'GET', 'POST'}:
+            return JSONResponse({'detail': 'Method not allowed'}, status_code=405)
+        try:
+            size = int(request.headers.get('content-length', '0'))
+        except ValueError:
+            return JSONResponse({'detail': 'Invalid content length'}, status_code=400)
+        if size < 0 or size > 1048576:
+            return JSONResponse({'detail': 'Body exceeds the configured limit'}, status_code=413)
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > 1048576:
+                return JSONResponse({'detail': 'Body exceeds the configured limit'}, status_code=413)
+        headers = {'Authorization': 'Bearer ' + settings.backend_token,
+                   'Content-Type': request.headers.get('content-type', 'application/json')}
+        if 'idempotency-key' in request.headers:
+            headers['Idempotency-Key'] = request.headers['idempotency-key']
+        query = request.scope.get('query_string', b'').decode('ascii')
+        url = settings.backend_url + route + ('?' + query if query else '')
+        try:
+            async with request.app.state.client.stream(request.method, url, headers=headers, content=bytes(body)) as result:
+                content = bytearray()
+                async for chunk in result.aiter_bytes():
+                    content.extend(chunk)
+                    if len(content) > 8388608:
+                        return JSONResponse({'detail': 'Backend response exceeds the configured limit'}, status_code=502)
+                return Response(bytes(content), status_code=result.status_code,
+                                media_type=result.headers.get('content-type', 'application/json'))
+        except httpx.HTTPError:
+            return JSONResponse({'detail': 'Backend connection unavailable'}, status_code=502)
+
+    @app.get('/{path:path}')
+    async def static(path: str):
+        if any(part.startswith('.') for part in path.split('/') if part):
+            return Response(status_code=404)
+        target = (root / path).resolve()
+        if not target.is_relative_to(root):
+            return Response(status_code=404)
+        if target.is_file():
+            return FileResponse(target)
+        if path.startswith('assets/') or Path(path).suffix:
+            return Response(status_code=404)
+        return FileResponse(root / 'index.html')
+
+    return app
 
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--port',type=int,default=8091)
-    parser.add_argument('--tunnel-port',type=int,default=58188)
-    parser.add_argument('--ssm-parameter',default='/k8s/jira-event-layer')
-    args=parser.parse_args()
-    import boto3
-    cfg=json.loads(boto3.client('ssm',region_name='us-east-1').get_parameter(Name=args.ssm_parameter,WithDecryption=True)['Parameter']['Value'])
-    root=Path(__file__).resolve().parents[1]/'frontend'/'dist'
-    if not (root/'index.html').is_file():raise SystemExit('Build the frontend first.')
-    tunnel=subprocess.Popen(['kubectl','--context','fett','--request-timeout=10s','-n','infra','port-forward','svc/jira-event-layer-api',f'{args.tunnel_port}:80','--address','127.0.0.1'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--port', type=int, help='Override STUDIO_PORT')
+    args = parser.parse_args()
+    env = dict(os.environ)
+    if args.port is not None:
+        env['STUDIO_PORT'] = str(args.port)
     try:
-        for _ in range(50):
-            if tunnel.poll() is not None:raise RuntimeError('Private tunnel failed to start; inspect the selected port and kubectl access.')
-            try:
-                with socket.create_connection(('127.0.0.1',args.tunnel_port),timeout=.2):break
-            except OSError:time.sleep(.1)
-        else:raise RuntimeError('Private tunnel startup timed out.')
-        server=Gateway(('127.0.0.1',args.port),root,f'http://127.0.0.1:{args.tunnel_port}',cfg['ADMIN_TOKEN'])
-        def stop(*_): threading.Thread(target=server.shutdown,daemon=True).start()
-        signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGINT,stop)
-        print(f'Editor: http://127.0.0.1:{args.port} · API and database: Fett',flush=True)
-        try:server.serve_forever()
-        finally:server.server_close()
-    finally:
-        tunnel.terminate()
-        try:tunnel.wait(timeout=5)
-        except subprocess.TimeoutExpired:tunnel.kill();tunnel.wait()
+        settings = Settings.from_env(env)
+        app = create_app(settings)
+    except (ValueError, OSError):
+        raise SystemExit('Invalid studio configuration. Check STUDIO_* variables and mounted secret files.') from None
+    uvicorn.run(app, host=settings.host, port=settings.port, access_log=False, proxy_headers=False,
+                limit_concurrency=100, timeout_graceful_shutdown=30)
 
 
-if __name__=='__main__':main()
+if __name__ == '__main__':
+    main()

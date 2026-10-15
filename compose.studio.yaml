@@ -1,54 +1,33 @@
-# Independent local installation. No existing .env or Fett credentials are read.
-name: jira-automation-studio
-x-environment: &environment
-  DATABASE_URL: postgresql://studio:local-studio-only@postgres:5432/studio
-  TENANT_ID: local-studio
-  API_SURFACE: management
-  ADMIN_TOKEN: ${STUDIO_ADMIN_TOKEN:-local-studio-admin-not-for-production-2026}
-  ALLOWED_JIRA_PROJECTS: ${STUDIO_JIRA_PROJECTS:-}
-  ALLOWED_REPOSITORIES: ${STUDIO_REPOSITORIES:-}
-  JIRA_ACCOUNT_EMAIL: ${STUDIO_JIRA_ACCOUNT_EMAIL:-}
-  JIRA_API_TOKEN: ${STUDIO_JIRA_API_TOKEN:-}
-  JIRA_CLOUD_ID: ${STUDIO_JIRA_CLOUD_ID:-}
-  BITBUCKET_ACCOUNT_EMAIL: ${STUDIO_BITBUCKET_ACCOUNT_EMAIL:-}
-  BITBUCKET_API_TOKEN: ${STUDIO_BITBUCKET_API_TOKEN:-}
-  ALLOWED_JIRA_FIELDS: ${STUDIO_JIRA_FIELDS:-summary,description,labels,priority,assignee,duedate}
-  JIRA_REQUIRED_LABEL: ${STUDIO_JIRA_REQUIRED_LABEL:-automation-managed}
+# Optional console for an existing backend. No database, tenant or provider defaults.
 services:
-  postgres:
-    image: postgres:17
-    environment: {POSTGRES_DB: studio, POSTGRES_USER: studio, POSTGRES_PASSWORD: local-studio-only}
-    volumes: [studio-data:/var/lib/postgresql/data]
-    healthcheck: {test: [CMD-SHELL, pg_isready -U studio], interval: 2s, timeout: 3s, retries: 30}
-    mem_limit: 256m
-  migrate:
-    build: .
-    environment: *environment
-    command: [python, -m, app.migrate]
-    healthcheck: {disable: true}
-    depends_on: {postgres: {condition: service_healthy}}
-  api:
-    build: .
-    environment: *environment
-    depends_on: {migrate: {condition: service_completed_successfully}}
-    mem_limit: 384m
-    cpus: 1
-  worker:
-    build: .
-    environment: *environment
-    command: [python, -m, app.worker]
-    depends_on: {migrate: {condition: service_completed_successfully}}
-    healthcheck: {test: [CMD, python, -m, app.health, worker], interval: 15s, timeout: 3s, start_period: 30s, retries: 3}
-    mem_limit: 256m
-    cpus: 0.5
   studio:
-    build: ./frontend
+    image: ${STUDIO_IMAGE:-automation-studio:1.0.0}
+    build: {context: ., dockerfile: frontend/Dockerfile}
+    user: "10001:10001"
+    read_only: true
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 384m
+    cpus: 1.0
+    restart: unless-stopped
+    stop_grace_period: 35s
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
     environment:
-      STUDIO_PORT: ${STUDIO_PORT:-8091}
-      STUDIO_ADMIN_TOKEN: ${STUDIO_ADMIN_TOKEN:-local-studio-admin-not-for-production-2026}
-    ports: ["127.0.0.1:${STUDIO_PORT:-8091}:80"]
-    depends_on: {api: {condition: service_healthy}}
-    mem_limit: 64m
-    cpus: 0.5
-volumes:
-  studio-data:
+      STUDIO_HOST: 0.0.0.0
+      STUDIO_PORT: 8080
+      STUDIO_BACKEND_URL: ${STUDIO_BACKEND_URL:?Set the backend URL reachable from the console}
+      STUDIO_PUBLIC_ORIGIN: ${STUDIO_PUBLIC_ORIGIN:?Set the console browser origin}
+      STUDIO_BACKEND_TOKEN_FILE: /run/secrets/studio_backend_token
+      STUDIO_LOGIN_USERNAME: ${STUDIO_LOGIN_USERNAME:?Set the console login username}
+      STUDIO_LOGIN_PASSWORD_FILE: /run/secrets/studio_login_password
+    secrets: [studio_backend_token, studio_login_password]
+    ports: ["${STUDIO_BIND_ADDRESS:-127.0.0.1}:${STUDIO_PUBLISHED_PORT:-8093}:8080"]
+secrets:
+  studio_backend_token:
+    file: ${STUDIO_BACKEND_TOKEN_FILE:?Set the host path to the backend token file}
+  studio_login_password:
+    file: ${STUDIO_LOGIN_PASSWORD_FILE:?Set the host path to the console password file}

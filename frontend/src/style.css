@@ -319,7 +319,7 @@ nav .nav-dot {
   margin-bottom: 16px;
   font-size: 12px;
 }
-.local-indicator {
+.connection-info {
   font-size: 11px;
   color: #6f687e;
   background: #faf9fc;
@@ -327,7 +327,7 @@ nav .nav-dot {
   border-radius: 8px;
   padding: 14px;
 }
-.local-indicator > span,
+.connection-info > span,
 .environment > span {
   display: inline-block;
   width: 6px;
@@ -336,9 +336,10 @@ nav .nav-dot {
   border-radius: 50%;
   margin-right: 6px;
 }
-.local-indicator small {
+.connection-info small {
   display: block;
-  margin: 6px 0 0 13px;
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
   color: #a39baa;
   font-size: 10px;
 }
@@ -1479,7 +1480,7 @@ td button {
   .brand > span:not(.brand-symbol),
   .workspace-label,
   .workspace,
-  .sidebar-bottom .local-indicator,
+  .sidebar-bottom .connection-info,
   .sidebar-bottom .profile,
   .nav-dot {
     display: none;

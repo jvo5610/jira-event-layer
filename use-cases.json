@@ -41,7 +41,7 @@
       "id": "repository-pipeline",
       "status": "native_e2e_passed",
       "evidence": "48b45b8 on 2026-10-07: native Jira webhook with rule revision 2, Bitbucket pipeline #4 successful, negative filter and duplicate delivery passed. Rerun opt-in live suite for each release",
-      "limit": "Pipeline executes in the isolated Fett repository; repository provisioning side effects remain outside this service"
+      "limit": "Pipeline executes in the operator-configured repository; repository provisioning side effects remain outside this service"
     },
     {
       "id": "create-from-source",

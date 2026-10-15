@@ -13,9 +13,9 @@ import shutil
 ROOT_FILES = (".gitignore", ".dockerignore", ".env.example", "Dockerfile", "compose.yaml", "compose.dev.yaml",
               "pyproject.toml", "uv.lock", "README.md", "CONTRIBUTING.md", "SECURITY.md", "use-cases.json",
               ".github/workflows/ci.yml")
-STUDIO_FILES = ("compose.studio.yaml", ".env.studio.example", "docs/local-studio.md",
+STUDIO_FILES = ("compose.studio.yaml", ".env.studio.example", "docs/studio.md",
                 "frontend/package.json", "frontend/package-lock.json", "frontend/tsconfig.json",
-                "frontend/index.html", "frontend/Dockerfile", "frontend/.dockerignore", "frontend/nginx.conf.template",
+                "frontend/index.html", "frontend/Dockerfile", "frontend/.dockerignore",
                 "frontend/src/main.tsx", "frontend/src/Canvas.tsx", "frontend/src/Forms.tsx",
                 "frontend/src/model.ts", "frontend/src/model.test.ts", "frontend/src/style.css")
 STUDIO_FILES += ("frontend/src/i18n.ts", "frontend/src/i18n.test.ts")

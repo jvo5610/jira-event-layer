@@ -68,21 +68,23 @@ export const messages: Record<string, [string, string]> = {
   "Automation Studio inicio": ["Inicio", "Home"],
   WORKSPACE: ["ESPACIO", "WORKSPACE"],
   Workspace: ["Espacio", "Workspace"],
-  "Local Studio": ["Automatizaciones", "Automation"],
-  "Instalación independiente": ["Conectado a la API", "Connected to API"],
+  Automatizaciones: ["Automatizaciones", "Automation"],
+  "Editor de reglas": ["Editor de reglas", "Rule editor"],
+  Backend: ["Backend", "Backend"],
+  "Sin verificar": ["Sin verificar", "Not verified"],
+  "Acceso a la consola": ["Acceso a la consola", "Console access"],
+  Autenticado: ["Autenticado", "Authenticated"],
+  "Acceso local": ["Acceso local", "Local access"],
   Escenarios: ["Reglas", "Rules"],
   Eventos: ["Eventos", "Events"],
   Ejecuciones: ["Ejecuciones", "Runs"],
   Auditoría: ["Auditoría", "Audit log"],
   Instalación: ["Configuración", "Settings"],
   Configuración: ["Configuración", "Settings"],
-  "Docker local": ["Conexión privada", "Private connection"],
   "Solo en esta máquina": [
     "Acceso desde esta máquina",
     "Access from this computer",
   ],
-  "Sesión local": ["Acceso local", "Local access"],
-  "Administrador · loopback": ["Administrador", "Administrator"],
   "Contrato y ayuda": ["Ayuda técnica", "Technical help"],
   "Cerrar aviso": ["Cerrar aviso", "Dismiss"],
   Volver: ["Volver", "Back"],
@@ -213,7 +215,7 @@ export const messages: Record<string, [string, string]> = {
     "Cambios realizados en las reglas y ejecuciones.",
     "Changes made to rules and runs.",
   ],
-  "Contrato, conectores y estado del entorno local.": [
+  "Idioma, conexión y conectores.": [
     "Idioma, conexión y conectores.",
     "Language, connection and connectors.",
   ],
@@ -223,21 +225,19 @@ export const messages: Record<string, [string, string]> = {
   "Escenarios guardados": ["Reglas guardadas", "Saved rules"],
   "Escenarios activos": ["Reglas activas", "Active rules"],
   "Tipos de acción disponibles": ["Acciones disponibles", "Available actions"],
-  "Entorno aislado": ["Conexión", "Connection"],
-  "Base de datos, API y worker propios. No usa Fett ni hereda sus secretos. La puerta de acceso local opera como administrador y no debe publicarse.":
+  "La URL del backend se configura al iniciar el servicio. Guardar una regla no la activa.":
     [
-      "Los cambios se guardan en la API conectada. Guardar una regla no la activa.",
-      "Changes are saved to the connected API. Saving a rule does not enable it.",
+      "La URL del backend se configura al iniciar el servicio. Guardar una regla no la activa.",
+      "The backend URL is configured at startup. Saving a rule does not enable it.",
     ],
-  "127.0.0.1 · Docker": ["Acceso privado", "Private access"],
   "Herramientas técnicas": ["Información técnica", "Technical information"],
   "JSON Schema real del backend": ["Esquema de reglas", "Rule schema"],
   "Contrato completo": ["Ver esquema", "View schema"],
   "Estado y métricas": ["Estado y métricas", "Status and metrics"],
-  "Los tokens permanecen del lado del servidor. Para uso compartido o público falta autenticación de usuarios; este acceso es exclusivo para desarrollo local.":
+  "Las credenciales del backend permanecen en el servidor. Los permisos dependen del token configurado.":
     [
-      "Este acceso tiene permisos de administrador y solo está disponible desde esta máquina.",
-      "This access has administrator permissions and is only available from this computer.",
+      "Las credenciales del backend permanecen en el servidor. Los permisos dependen del token configurado.",
+      "Backend credentials stay on the server. Permissions depend on the configured token.",
     ],
   "Buscar en la lista": ["Buscar en la lista", "Search list"],
   "Buscar escenarios…": ["Buscar reglas…", "Search rules…"],
@@ -339,7 +339,7 @@ export const messages: Record<string, [string, string]> = {
   "Pipeline reconciliado.": ["Ejecución vinculada.", "Run linked."],
   "Reconciliar pipeline": ["Vincular pipeline", "Link pipeline"],
   "Ingresar un evento": ["Ingresar evento", "Submit event"],
-  "Se almacena en la instalación local y se procesa con sus reglas activas.": [
+  "Se guarda en el backend configurado y se procesa con sus reglas activas.": [
     "Se guardará en la API conectada y se procesará con las reglas activas.",
     "It will be saved to the connected API and processed by active rules.",
   ],
@@ -357,7 +357,7 @@ export const messages: Record<string, [string, string]> = {
       "¿Guardar y procesar el evento? Puede ejecutar acciones de las reglas activas.",
       "Save and process this event? It may execute actions from active rules.",
     ],
-  "Evento recibido por el motor local.": [
+  "Evento recibido por el motor.": [
     "Evento recibido.",
     "Event received.",
   ],
@@ -550,7 +550,6 @@ export const messages: Record<string, [string, string]> = {
   Actualizar: ["Actualizar", "Refresh"],
   Operador: ["Operador", "Operator"],
   Existencia: ["Existencia", "Existence"],
-  "Conectado a": ["Conectado a", "Connected to"],
   pending: ["Pendiente", "Pending"],
   dispatching: ["Enviando", "Dispatching"],
   waiting: ["En espera", "Waiting"],
@@ -574,8 +573,8 @@ export const messages: Record<string, [string, string]> = {
       "¿Activar {name}, versión {version}? Los próximos eventos pueden ejecutar sus acciones.",
       "Enable {name}, version {version}? Future matching events may execute its actions.",
     ],
-  "No se pudo conectar con Fett. Revisá la conexión privada.": [
-    "No se pudo conectar con Fett. Revisá la conexión privada.",
-    "Could not connect to Fett. Check the private connection.",
+  "No se pudo cargar la configuración de conexión.": [
+    "No se pudo cargar la configuración de conexión.",
+    "Could not load connection configuration.",
   ],
 };

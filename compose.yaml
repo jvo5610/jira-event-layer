@@ -33,6 +33,23 @@ x-environment: &environment
   BITBUCKET_MAX_DAILY_WRITES: ${BITBUCKET_MAX_DAILY_WRITES:-100}
 
 services:
+  studio:
+    <<: *runtime
+    profiles: [studio]
+    image: ${STUDIO_IMAGE:-automation-studio:1.0.0}
+    build: {context: ., dockerfile: frontend/Dockerfile}
+    stop_grace_period: 35s
+    environment:
+      STUDIO_HOST: 0.0.0.0
+      STUDIO_PORT: 8080
+      STUDIO_BACKEND_URL: ${STUDIO_BACKEND_URL:-http://api:8080}
+      STUDIO_PUBLIC_ORIGIN: ${STUDIO_PUBLIC_ORIGIN:-http://127.0.0.1:8093}
+      STUDIO_BACKEND_TOKEN_FILE: /run/secrets/admin_token
+      STUDIO_LOGIN_USERNAME: ${STUDIO_LOGIN_USERNAME:-operator}
+      STUDIO_LOGIN_PASSWORD_FILE: /run/secrets/studio_login_password
+    secrets: [admin_token, studio_login_password]
+    ports: ["${STUDIO_BIND_ADDRESS:-127.0.0.1}:${STUDIO_PUBLISHED_PORT:-8093}:8080"]
+    depends_on: {api: {condition: service_healthy}}
   migrate:
     <<: *runtime
     restart: "no"
@@ -92,6 +109,8 @@ services:
       retries: 3
 
 secrets:
+  studio_login_password:
+    file: ${AUTOMATION_SECRETS_DIR:-./secrets}/studio_login_password
   database_url:
     file: ${AUTOMATION_SECRETS_DIR:-./secrets}/database_url
   migration_database_url:

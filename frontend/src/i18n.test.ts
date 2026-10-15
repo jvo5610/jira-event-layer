@@ -21,7 +21,7 @@ describe("Language and field mapping", () => {
         version: 3,
       }),
     ).toContain("Version 3");
-    expect(t("Entorno aislado")).toBe("Connection");
+    expect(t("Editor de reglas")).toBe("Rule editor");
     expect(Object.keys(messages).length).toBeGreaterThan(150);
   });
   it("offers relative paths for list conditions and current Jira guards", () => {

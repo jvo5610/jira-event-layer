@@ -44,6 +44,21 @@ def test_development_compose_uses_role_specific_healthchecks():
     assert services["migrate"]["healthcheck"]["disable"] is True
 
 
+def test_console_distribution_has_no_implicit_database_or_credentials():
+    root = Path(__file__).resolve().parents[1]
+    doc = yaml.safe_load((root / 'compose.studio.yaml').read_text())
+    assert set(doc['services']) == {'studio'}
+    studio = doc['services']['studio']
+    assert studio['read_only'] is True and studio['cap_drop'] == ['ALL']
+    assert studio['build'] == {'context': '.', 'dockerfile': 'frontend/Dockerfile'}
+    assert ':?' in studio['environment']['STUDIO_BACKEND_URL']
+    assert 'STUDIO_BACKEND_TOKEN' not in studio['environment']
+    assert studio['environment']['STUDIO_BACKEND_TOKEN_FILE'].startswith('/run/secrets/')
+    assert studio['environment']['STUDIO_LOGIN_PASSWORD_FILE'].startswith('/run/secrets/')
+    portable = yaml.safe_load((root / 'compose.yaml').read_text())
+    assert portable['services']['studio']['profiles'] == ['studio']
+
+
 def test_live_runner_emits_alias_free_rules_for_shared_bindings():
     binding = {"path": '_steps["0"].key'}
     spec = {"apiVersion": "automation/v1", "kind": "Rule", "name": "test-shared",
@@ -60,7 +75,7 @@ def test_source_export_excludes_private_state(tmp_path):
     files = export(Path(__file__).resolve().parents[1], destination)
     assert "Dockerfile" in files and "tools/selftest.py" in files
     assert "frontend/src/main.tsx" in files and "compose.studio.yaml" in files
-    assert "docs/local-studio.md" in files
+    assert "docs/studio.md" in files
     assert not (destination / ".env.studio").exists()
     assert not (destination / "frontend/node_modules").exists()
     assert "app/migrations/001_initial.sql" in files

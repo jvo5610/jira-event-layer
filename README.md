@@ -13,8 +13,9 @@ See [capabilities and production gates](use-cases.json). Not affiliated with Atl
 
 ## Quick start
 
-For the local visual scenario editor (Docker, loopback only), see
-[Automation Studio](docs/local-studio.md). It covers the v1 actions and filters,
+For the optional, runtime-configured visual editor, see
+[Automation Studio](docs/studio.md). The same image runs against any configured backend,
+independently of Docker, Kubernetes, ECS or other deployment choices. It covers the v1 actions and filters,
 maps observed event fields, and uses the same versioned API and worker.
 
 Prerequisites: Git, Python 3.12+, [uv](https://docs.astral.sh/uv/getting-started/installation/),
@@ -78,13 +79,13 @@ Sin --full ejecuta la suite con Postgres real pero omite build/aceptación de co
 Para explorar la API local, `python3 tools/local_config.py` genera una configuración de desarrollo
 sin sobrescribir archivos y `docker compose -p automation-dev -f compose.dev.yaml up -d --build` arranca
 los servicios. Usar el ADMIN_TOKEN local para consultar /v1/schema. Esto es desarrollo, no producción.
-Los ejemplos operativos están alineados con el tenant Fett: proyecto Jira `KAN` y repositorio
-Bitbucket `jvidelaolmos/jira-event-layer-lab`. La suite local usa dobles aislados y no llama proveedores.
+Los destinos de los ejemplos no configuran la instalación. Adaptar proyecto, tipos, estados y
+repositorios a los recursos autorizados del operador. La suite local usa dobles aislados y no llama proveedores.
 
 ## Pruebas con proveedores reales
 
-Son opt-in y separadas de la suite reproducible. Usan los recursos operativos aislados de Fett y
-credenciales con permisos mínimos. Crean evidencia real en Jira y ejecutan el pipeline real de Bitbucket.
+Son opt-in y separadas de la suite reproducible. Los destinos se pasan explícitamente y las
+credenciales tienen permisos mínimos. Crean evidencia real en Jira y ejecutan el pipeline real de Bitbucket.
 
 ```sh
 uv run python tools/e2e_live.py --provider bitbucket --output work/e2e-bitbucket \
@@ -256,8 +257,8 @@ Las rutas JSON Pointer (`/issue/key`, `/_steps/0/key`) se rechazan antes de guar
 `GET /v1/schema` describe la sintaxis en los bindings, filtros y guardas (`x-path-syntax`).
 
 Los ejemplos usan el proyecto `KAN`, los estados verificados `10001` → `10003`, el tipo `10003`,
-el vínculo `10000` y `jvidelaolmos/jira-event-layer-lab`. Esos recursos están aislados para Fett,
-pero los flujos y las llamadas son los mismos que en una operación productiva.
+el vínculo `10000` y `jvidelaolmos/jira-event-layer-lab`. Son datos ilustrativos, no recursos
+requeridos por la aplicación. Verificar IDs y permisos propios antes de activar una regla.
 
 ## Durabilidad e idempotencia
 

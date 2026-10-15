@@ -81,17 +81,26 @@ function App() {
   useEffect(() => {
     document.documentElement.lang = language;
   }, [language]);
-  const [connection, setConnection] = useState({
-    environment: "Local",
-    mode: "local",
-  });
+  const [connection, setConnection] = useState<{
+    backend_url: string;
+    auth_mode: "basic" | "local";
+  } | null>(null);
+  const [connectionError, setConnectionError] = useState(false);
   useEffect(() => {
-    fetch("/studio-config")
-      .then((r) => r.json())
-      .then((value) => {
-        if (typeof value.environment === "string") setConnection(value);
+    fetch("/runtime-config", { signal: AbortSignal.timeout(10000) })
+      .then((r) => {
+        if (!r.ok) throw new Error("Runtime configuration unavailable");
+        return r.json();
       })
-      .catch(() => {});
+      .then((value) => {
+        if (
+          typeof value.backend_url !== "string" ||
+          !["basic", "local"].includes(value.auth_mode)
+        )
+          throw new Error("Invalid runtime configuration");
+        setConnection(value);
+      })
+      .catch(() => setConnectionError(true));
   }, []);
   const [page, setPage] = useState<Page>("rules");
   const [catalog, setCatalog] = useState<Obj | null>(null);
@@ -503,17 +512,6 @@ function App() {
             automation<span className="brand-dot">.</span>
           </span>
         </button>
-        <div className="workspace-label">{t("WORKSPACE")}</div>
-        <div className="workspace">
-          <span className="avatar">L</span>
-          <div>
-            {t("Local Studio")}
-            <small>
-              {t("Conectado a")} {connection.environment}
-            </small>
-          </div>
-          <ChevronRight size={14} />
-        </div>
         <nav>
           {(
             [
@@ -542,15 +540,23 @@ function App() {
           <button aria-label={t("Instalación")} onClick={() => navigate("settings")}>
             <Settings2 size={18} /> {t("Instalación") + " "}
           </button>
-          <div className="local-indicator">
-            <span /> {t("Conectado a")} {connection.environment}
-            <small>{t("Solo en esta máquina")}</small>
+          <div className="connection-info">
+            {t("Backend")}
+            <small>{connection?.backend_url ?? t("Sin verificar")}</small>
           </div>
           <div className="profile">
-            <span className="avatar small">L</span>
+            <span className="avatar small">
+              <ShieldCheck size={15} />
+            </span>
             <div>
-              {t("Sesión local")}
-              <small>{t("Administrador · loopback")}</small>
+              {t("Acceso a la consola")}
+              <small>
+                {connection?.auth_mode === "basic"
+                  ? t("Autenticado")
+                  : connection?.auth_mode === "local"
+                    ? t("Acceso local")
+                    : t("Sin verificar")}
+              </small>
             </div>
           </div>
         </div>
@@ -558,7 +564,7 @@ function App() {
       <main>
         <header className="topbar">
           <div className="breadcrumbs">
-            {t("Workspace") + " "}
+            {t("Automatizaciones") + " "}
             <ChevronRight size={13} />{" "}
             <span>
               {page === "editor"
@@ -579,9 +585,6 @@ function App() {
             )}
           </div>
           <div className="topbar-right">
-            <span className="environment">
-              <span /> {connection.environment.toUpperCase()}
-            </span>
             <button
               className="icon-button"
               title={t("Contrato y ayuda")}
@@ -589,9 +592,13 @@ function App() {
             >
               <CircleHelp size={18} />
             </button>
-            <span className="avatar small purple">L</span>
           </div>
         </header>
+        {connectionError && (
+          <div role="alert" className="notice error-notice">
+            {t("No se pudo cargar la configuración de conexión.")}
+          </div>
+        )}
         {notice && (
           <div
             role="alert"
@@ -1132,7 +1139,7 @@ function App() {
                         "Cambios de configuración y acciones de operación registradas.",
                       ),
                       settings: t(
-                        "Contrato, conectores y estado del entorno local.",
+                        "Idioma, conexión y conectores.",
                       ),
                     }[page]
                   }
@@ -1219,16 +1226,14 @@ function App() {
                   <span className="stat-icon violet">
                     <ShieldCheck />
                   </span>
-                  <h3>{t("Entorno aislado")}</h3>
-                  <strong>{connection.environment}</strong>
+                  <h3>{t("Backend")}</h3>
+                  <strong>{connection?.backend_url ?? t("Sin verificar")}</strong>
                   <p>
                     {t(
-                      "Base de datos, API y worker propios. No usa Fett ni hereda sus secretos. La puerta de acceso local opera como administrador y no debe publicarse.",
+                      "La URL del backend se configura al iniciar el servicio. Guardar una regla no la activa.",
                     ) + " "}
                   </p>
-                  <span className="status succeeded">
-                    {t("127.0.0.1 · Docker")}
-                  </span>
+                  <code>STUDIO_BACKEND_URL</code>
                 </section>
                 {Object.entries(catalog?.connectors ?? {}).map(([key, c]) => (
                   <section className="card" key={key}>
@@ -1294,7 +1299,7 @@ function App() {
                   </button>
                   <p>
                     {t(
-                      "Los tokens permanecen del lado del servidor. Para uso compartido o público falta autenticación de usuarios; este acceso es exclusivo para desarrollo local.",
+                      "Las credenciales del backend permanecen en el servidor. Los permisos dependen del token configurado.",
                     ) + " "}
                   </p>
                 </section>
@@ -1755,7 +1760,7 @@ function App() {
                 <h3>{t("Ingresar un evento")}</h3>
                 <p>
                   {t(
-                    "Se almacena en la instalación local y se procesa con sus reglas activas.",
+                    "Se guarda en el backend configurado y se procesa con sus reglas activas.",
                   ) + " "}
                 </p>
               </div>
@@ -1819,7 +1824,7 @@ function App() {
                   setImportEvent(false);
                   setCatalog(await api("/v1/catalog"));
                   await refresh("events");
-                  tell(t("Evento recibido por el motor local."));
+                  tell(t("Evento recibido por el motor."));
                 })
               }
             >
