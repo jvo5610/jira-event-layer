@@ -3,6 +3,22 @@ from app.paths import check_path
 from test_integration import env
 
 
+def test_catalog_does_not_claim_worker_jira_credentials_are_missing(env):
+    client, _, settings = env
+    settings.jira_token = ""
+    settings.jira_cloud_id = ""
+    assert client.get('/v1/catalog').json()['connectors']['jira']['configured'] is None
+    settings.jira_token = "provider-test-token"
+    assert client.get('/v1/catalog').json()['connectors']['jira']['configured'] is None
+    settings.jira_cloud_id = '00000000-0000-0000-0000-000000000001'
+    assert client.get('/v1/catalog').json()['connectors']['jira']['configured'] is True
+    # Declared configuration is not a live provider permission/health check.
+    settings.bitbucket_token = ""
+    assert client.get('/v1/catalog').json()['connectors']['bitbucket']['configured'] is None
+    settings.allowed_repositories = ()
+    assert client.get('/v1/catalog').json()['connectors']['bitbucket']['configured'] is False
+
+
 def context_fixture(client, store, suffix=''):
     import yaml
     from test_integration import activate, ingest

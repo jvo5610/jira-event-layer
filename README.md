@@ -872,6 +872,10 @@ Bootstrap sólo es necesario para registrar el primer administrador en una DB no
 Después no se vuelve a usar para autenticar y puede retirarse. El secreto de firma se mantiene
 en la API; una credencial Bearer válida no reemplaza la firma HMAC del webhook, ni viceversa.
 Los proyectos y campos Jira se definen en las reglas; no hay allowlists Jira en env vars.
+La API no necesita credenciales Jira para recibir eventos o gestionar reglas. El catálogo
+informa configuración declarada en este proceso, **no salud ni credenciales del worker**:
+Jira sin credenciales locales devuelve `configured:null` (sin verificar), no “deshabilitado”.
+No copiar secretos del worker a la API sólo para cambiar un indicador de la GUI.
 
 #### `worker`: ejecutor
 

@@ -28,6 +28,10 @@ Los secretos pueden ser archivos montados por cualquier plataforma. La aplicaci�
 
 Configuración muestra la URL efectiva del backend y la variable que la controla. El encabezado no contiene nombres de cluster, plataforma ni etiquetas ambientales inventadas. El idioma Español/English se guarda por navegador; no se traducen payloads, DSL ni datos del proveedor.
 
+El estado de conectores es declarativo, no una llamada al proveedor. Si los tokens Jira están
+sólo en el worker, el catálogo de la API devuelve `configured:null` y Studio muestra **Sin verificar**,
+no que falten credenciales al ejecutor. No duplicar secretos en la API para cambiar este indicador.
+
 El selector de datos muestra y busca rutas raw del payload, como `issue.fields.duedate` o `comment.body`, sin aliases ni traducciones inferidas. Los tipos son los identificadores JSON observados (`null`, `string`, `number`, etc.). Los ejemplos escalares usan representación JSON para distinguir `"0"` de `0` y conservar `false`. Las descripciones de la interfaz sí se traducen; la protección de datos sensibles y los resúmenes acotados de objetos/listas se mantienen. No se consulta Jira para reemplazar los nombres de las rutas.
 
 La API Jira [`GET /rest/api/3/field`](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-fields/#api-rest-api-3-field-get) permite obtener metadatos de campos de issues, no el schema completo de cualquier webhook por nombre de evento. Para comentarios, Atlassian documenta que el objeto del webhook tiene la forma de la respuesta de [Get comment](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-comments/#api-rest-api-3-issue-issueidorkey-comment-id-get); esa consulta requiere identificar el issue y el comentario. [Los campos enviados dependen del tipo de webhook](https://developer.atlassian.com/cloud/jira/platform/webhooks/#webhook-payload). Metadatos de issues, schema documentado y campos realmente observados no son la misma fuente y no deben mezclarse como si fueran una garantía de presencia.
