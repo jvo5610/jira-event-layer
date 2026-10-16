@@ -13,7 +13,7 @@ from psycopg import OperationalError
 from psycopg_pool import PoolTimeout
 from starlette.concurrency import run_in_threadpool
 
-from app.config import Settings, secret
+from app.config import Settings, secret, jira_configured
 from app.auth import required_permission
 from app.tokens import TokenManager, DatabaseAuthenticator
 from app.catalog import SAMPLE_LIMIT, VISITS_PER_EVENT, discover
@@ -182,14 +182,6 @@ def create_app(settings=None, store=None, authenticator=None):
     def revoke_token(token_id: UUID, request: Request):
         return request.app.state.tokens.revoke(request.state.identity, token_id)
 
-    def checked(text, request):
-        rule, digest = parse_rule(text)
-        try:
-            request.app.state.settings.check_targets(rule)
-        except ValueError as exc:
-            raise RuleError(str(exc)) from None
-        return rule, digest
-
     @app.get("/v1/schema", dependencies=[Depends(authorize)])
     def schema():
         return Rule.model_json_schema()
@@ -202,8 +194,8 @@ def create_app(settings=None, store=None, authenticator=None):
             "events": request.app.state.store.query("SELECT DISTINCT source,event_type FROM (SELECT source,event_type FROM events ORDER BY received_at DESC LIMIT 200) recent ORDER BY source,event_type"),
             "connectors": {
                 # Absence here says nothing about credentials held only by workers.
-                "jira": {"configured": True if cfg.jira_token and cfg.jira_cloud_id else None},
-                "bitbucket": {"configured": True if cfg.bitbucket_token and cfg.bitbucket_email else None if cfg.allowed_repositories else False, "repositories": cfg.allowed_repositories},
+                "jira": {"configured": True if jira_configured(cfg) and cfg.jira_cloud_id else None},
+                "bitbucket": {"configured": True if cfg.bitbucket_token else None},
             },
             "limits": {"actions": 10, "filter_depth": 12, "filter_nodes": 128, "filter_children": 32},
         }
@@ -217,14 +209,14 @@ def create_app(settings=None, store=None, authenticator=None):
                 "notice": "Observed fields, not a complete provider schema. Previews prefer non-empty values; sensitive fields are withheld and text is truncated. Objects/lists show structure only."}
 
     @app.post("/v1/rules/validate", dependencies=[Depends(authorize)], openapi_extra=YAML_BODY)
-    async def validate_yaml(request: Request, targets: bool = True):
+    async def validate_yaml(request: Request):
         try:
             text = (await request.body()).decode("utf-8")
         except UnicodeDecodeError:
             raise RuleError("YAML must be UTF-8") from None
-        rule, digest = checked(text, request) if targets else parse_rule(text)
+        rule, digest = parse_rule(text)
         validate_safety(rule)
-        return {"valid": True, "sha256": digest, "spec": rule.model_dump(), "targets_checked": targets, "safety_checked": True}
+        return {"valid": True, "sha256": digest, "spec": rule.model_dump(), "targets_checked": False, "safety_checked": True}
 
     @app.post("/v1/rules", status_code=201, dependencies=[Depends(authorize)], openapi_extra=YAML_BODY)
     async def save_yaml(request: Request):
@@ -232,7 +224,7 @@ def create_app(settings=None, store=None, authenticator=None):
             text = (await request.body()).decode("utf-8")
         except UnicodeDecodeError:
             raise RuleError("YAML must be UTF-8") from None
-        rule, digest = checked(text, request)
+        rule, digest = parse_rule(text)
         return await run_in_threadpool(request.app.state.store.save_rule, rule, digest, text)
 
     @app.get("/v1/rules", dependencies=[Depends(authorize)])
@@ -294,13 +286,6 @@ def create_app(settings=None, store=None, authenticator=None):
 
     @app.post("/v1/rules/{name}/activate", dependencies=[Depends(authorize)])
     def activate(name: str, body: Activation, request: Request):
-        rows = request.app.state.store.query("SELECT spec FROM rule_versions WHERE rule_name=%s AND version=%s", (name, body.version))
-        if not rows:
-            raise KeyError(name)
-        try:
-            request.app.state.settings.check_targets(Rule.model_validate(rows[0]["spec"]))
-        except ValueError as exc:
-            raise RuleError(str(exc)) from None
         return request.app.state.store.activate(name, body.version, body.sha256)
 
     @app.post("/v1/rules/{name}/disable", dependencies=[Depends(authorize)])
@@ -317,7 +302,7 @@ def create_app(settings=None, store=None, authenticator=None):
 
     @app.post("/v1/evaluate", dependencies=[Depends(authorize)])
     def evaluate(body: Evaluation, request: Request):
-        rule, digest = checked(body.yaml, request)
+        rule, digest = parse_rule(body.yaml)
         rows = sample(body.event_ids, request)
         if body.payload is not None:
             rows.append({"id": None, "source": body.source, "event_type": body.event_type, "payload": body.payload})
@@ -326,8 +311,8 @@ def create_app(settings=None, store=None, authenticator=None):
 
     @app.post("/v1/compare", dependencies=[Depends(authorize)])
     def compare(body: Comparison, request: Request):
-        left, ld = checked(body.left_yaml, request)
-        right, rd = checked(body.right_yaml, request)
+        left, ld = parse_rule(body.left_yaml)
+        right, rd = parse_rule(body.right_yaml)
         results = []
         for event in sample(body.event_ids, request):
             a = match(left, event["source"], event["event_type"], event["payload"])

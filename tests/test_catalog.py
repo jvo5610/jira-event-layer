@@ -15,8 +15,8 @@ def test_catalog_does_not_claim_worker_jira_credentials_are_missing(env):
     # Declared configuration is not a live provider permission/health check.
     settings.bitbucket_token = ""
     assert client.get('/v1/catalog').json()['connectors']['bitbucket']['configured'] is None
-    settings.allowed_repositories = ()
-    assert client.get('/v1/catalog').json()['connectors']['bitbucket']['configured'] is False
+    settings.bitbucket_token = "bitbucket-test-token"
+    assert client.get('/v1/catalog').json()['connectors']['bitbucket'] == {'configured': True}
 
 
 def context_fixture(client, store, suffix=''):
@@ -202,12 +202,11 @@ def test_keyset_events_and_runs(env):
     assert len({r['id'] for r in first_runs + second_runs}) == 4
 
 
-def test_syntax_import_does_not_require_destinations_but_save_does(env):
+def test_validate_and_save_do_not_require_server_destination_configuration(env):
     client, _, cfg = env
     from test_integration import YAML
-    cfg.allowed_repositories = ()
-    assert client.post('/v1/rules/validate', content=YAML).status_code == 422
+    assert client.post('/v1/rules/validate', content=YAML).status_code == 200
     result = client.post('/v1/rules/validate?targets=false', content=YAML)
     assert result.status_code == 200 and result.json()['targets_checked'] is False
-    assert client.post('/v1/rules', content=YAML).status_code == 422
+    assert client.post('/v1/rules', content=YAML).status_code == 201
     assert client.post('/v1/rules/validate?targets=false', content='when: &x {not: *x}').status_code == 422

@@ -8,5 +8,5 @@ with os.fdopen(fd, "w") as output:
     output.write("DB_HOST=127.0.0.1\nDB_PORT=55439\nDB_NAME=automation\nDB_USER=automation\nDB_PASSWORD=local-test-only\n")
     output.write("ADMIN_BOOTSTRAP_TOKEN=" + secrets.token_urlsafe(48) + "\n")
     output.write("JIRA_WEBHOOK_SECRET=" + secrets.token_urlsafe(48) + "\n")
-    output.write("BITBUCKET_ACCOUNT_EMAIL=\nBITBUCKET_API_TOKEN=\n")
+    output.write("JIRA_CLIENT_ID=\nJIRA_CLIENT_SECRET=\nJIRA_CLOUD_ID=\nBITBUCKET_API_TOKEN=\n")
 print("Generated .env (owner-only); existing files are never overwritten.")

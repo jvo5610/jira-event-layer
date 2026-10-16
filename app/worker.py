@@ -8,7 +8,7 @@ from urllib.parse import quote
 import httpx
 from psycopg.types.json import Jsonb
 
-from app.config import Settings
+from app.config import Settings, jira_configured
 from app.dsl import Rule, RuleError, render_action
 from app.store import Store
 from app.jira import AmbiguousWrite, ExecutionIdentity, Jira, PreflightRetry, WriteRateLimited
@@ -26,17 +26,14 @@ class Bitbucket:
         self.client = client or httpx.Client(timeout=20, follow_redirects=False)
 
     def call(self, method, action, *, body=None, external_uuid=None):
-        if not self.settings.bitbucket_token or not self.settings.bitbucket_email:
+        if not self.settings.bitbucket_token:
             raise RuleError("connector_credentials_missing")
         target = f"{action.workspace}/{action.repository}"
-        if target not in self.settings.allowed_repositories:
-            raise RuleError("connector_target_not_allowed")
         url = f"https://api.bitbucket.org/2.0/repositories/{target}/pipelines/"
         if external_uuid:
             url += quote(external_uuid, safe="")
         return bounded_request(self.client, method, url, json=body,
-                                   auth=(self.settings.bitbucket_email, self.settings.bitbucket_token),
-                                   headers={"Accept": "application/json"})
+                                   headers={"Accept": "application/json", "Authorization": f"Bearer {self.settings.bitbucket_token}"}, follow_redirects=False)
 
 
 class Worker:
@@ -47,7 +44,7 @@ class Worker:
         self.jira = jira or Jira(settings)
 
     def ensure_service_identity(self):
-        if not getattr(self.settings, 'jira_token', ''):
+        if not jira_configured(self.settings):
             return
         key = credential_key(self.settings)
         if getattr(self, '_identity_key', None) == key:
@@ -134,7 +131,6 @@ class Worker:
 
     def tick_jira(self, run, rule, action, payload):
         try:
-            self.settings.check_targets(rule)
             context = self.execution_context(run, payload)
             revision = self.store.query("SELECT sha256 FROM rule_versions WHERE rule_name=%s AND version=%s",
                                         (run["rule_name"], run["version"]))[0]
@@ -186,7 +182,6 @@ class Worker:
             self.finish(run, "needs_review", error="poll_budget_exhausted", external_uuid=run["external_uuid"])
             return True
         try:
-            self.settings.check_targets(rule)
             payload = None if polling else render_action(action, self.execution_context(run, rows[0]["payload"]))
             if not polling:
                 self.reserve_bitbucket_write(run)

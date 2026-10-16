@@ -178,7 +178,7 @@ def test_already_dispatched_pipeline_can_still_be_observed_without_new_writes():
         return httpx.Response(200, json={'uuid': '{pipeline}', 'state': {'name': 'COMPLETED', 'result': {'name': 'SUCCESSFUL'}}})
     worker = Worker.__new__(Worker)
     worker.store = SimpleNamespace(query=lambda *args: [{'spec': raw, 'payload': {}}])
-    worker.settings = SimpleNamespace(check_targets=lambda rule: None)
+    worker.settings = SimpleNamespace()
     worker.connector = SimpleNamespace(call=call)
     worker.claim = lambda: {'id': 'run', 'event_id': 'event', 'rule_name': raw['name'],
                             'version': 1, 'step': 0, 'status': 'waiting', 'attempts': 1, 'external_uuid': '{pipeline}'}

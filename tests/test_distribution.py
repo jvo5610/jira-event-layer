@@ -26,7 +26,7 @@ def test_live_runner_uses_v1_connector_environment(monkeypatch, tmp_path):
     args = parse_args(["--provider", "bitbucket", "--output", str(tmp_path / "evidence"),
                        "--allow-remote-writes", "--bitbucket-repository", "explicit/repo",
                        "--bitbucket-branch", "main", "--bitbucket-pipeline", "noop"])
-    with pytest.raises(RuntimeError, match="BITBUCKET_ACCOUNT_EMAIL"):
+    with pytest.raises(RuntimeError, match="BITBUCKET_API_TOKEN"):
         run(args)
 
 

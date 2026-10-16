@@ -91,22 +91,33 @@ def execute_case(client, actions, label, marker, timeout=240):
 def run(args):
     if not args.allow_remote_writes:
         raise RuntimeError("Live acceptance creates remote resources. Pass --allow-remote-writes explicitly")
+    from app.config import load_environment, jira_credentials_from_env
+    load_environment()
     stamp = uuid.uuid4().hex[:12]
     name = "automation-live-" + stamp
     config = {"TENANT_ID": name, "ADMIN_BOOTSTRAP_TOKEN": secrets.token_urlsafe(48),
               "JIRA_WEBHOOK_SECRET": secrets.token_urlsafe(48)}
     if args.provider in {"bitbucket", "all"}:
-        for key in ("BITBUCKET_ACCOUNT_EMAIL", "BITBUCKET_API_TOKEN"):
+        for key in ("BITBUCKET_API_TOKEN",):
             config[key] = required(key)
         repo = args.bitbucket_repository
         if repo.count("/") != 1:
             raise RuntimeError("--bitbucket-repository must be workspace/repository")
-        config["ALLOWED_REPOSITORIES"] = repo
         pipeline = args.bitbucket_pipeline
         branch = args.bitbucket_branch
     if args.provider in {"jira", "all"}:
-        for key in ("JIRA_API_TOKEN", "JIRA_CLOUD_ID"):
+        jira_credentials = jira_credentials_from_env()
+        if jira_credentials['jira_client_id']:
+            credential_names = ("JIRA_CLIENT_ID", "JIRA_CLIENT_SECRET", "JIRA_CLOUD_ID")
+        else:
+            credential_names = ("JIRA_API_TOKEN", "JIRA_CLOUD_ID")
+        for key in credential_names:
             config[key] = required(key)
+        from app.config import Settings
+        from app.jira import Jira
+        jira_provider = Jira(Settings({}, None, "", jira_cloud_id=config["JIRA_CLOUD_ID"],
+            jira_token=config.get("JIRA_API_TOKEN", ""), jira_client_id=config.get("JIRA_CLIENT_ID", ""),
+            jira_client_secret=config.get("JIRA_CLIENT_SECRET", "")))
         project = args.jira_project
         issue_type = args.jira_issue_type_id
         status = args.jira_target_status_id
@@ -163,7 +174,7 @@ def run(args):
                                   "DESCRIPTION": "Production-equivalent acceptance flow",
                                   "LANGUAGE": "python", "DEFAULT_REVIEWERS": "", "AWS_ACCOUNT_ID": "", "JIRA_ISSUE_KEY": "E2E-1"}.items()}}
                     run = execute_case(client, [action], "live-bitbucket", stamp + "-bb")
-                    with httpx.Client(timeout=20, auth=(config["BITBUCKET_ACCOUNT_EMAIL"], config["BITBUCKET_API_TOKEN"])) as provider:
+                    with httpx.Client(timeout=20, headers={"Authorization": "Bearer " + config["BITBUCKET_API_TOKEN"]}) as provider:
                         observed = provider.get(f"https://api.bitbucket.org/2.0/repositories/{repo}/pipelines/{run['external_uuid']}")
                         observed.raise_for_status()
                         data = observed.json()
@@ -199,7 +210,7 @@ def run(args):
                                if row["detail"].get("result") is not None}
                     created, cloned = results["0"]["key"], results["4"]["key"]
                     with httpx.Client(base_url=f"https://api.atlassian.com/ex/jira/{config['JIRA_CLOUD_ID']}/rest/api/3/",
-                                      headers={"Authorization": "Bearer " + config["JIRA_API_TOKEN"]}, timeout=20) as provider:
+                                      headers={"Authorization": "Bearer " + jira_provider.access_token()}, timeout=20) as provider:
                         original = provider.get("issue/" + created, params={"fields": "summary,status,labels,issuelinks", "properties": "automation.operation"})
                         original.raise_for_status()
                         current = original.json()["fields"]
@@ -228,7 +239,7 @@ def run(args):
                     stopped_results = [row["detail"]["result"] for row in stopped["log"] if row["detail"].get("result")]
                     assert len(stopped_results) == 1 and stopped_results[0]["stop"]
                     with httpx.Client(base_url=f"https://api.atlassian.com/ex/jira/{config['JIRA_CLOUD_ID']}/rest/api/3/",
-                                      headers={"Authorization": "Bearer " + config["JIRA_API_TOKEN"]}, timeout=20) as provider:
+                                      headers={"Authorization": "Bearer " + jira_provider.access_token()}, timeout=20) as provider:
                         after = provider.get("issue/" + created + "/comment")
                         after.raise_for_status()
                     assert after.json()["total"] == comments.json()["total"]

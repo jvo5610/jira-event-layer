@@ -32,8 +32,7 @@ def _test_database_config():
 @pytest.fixture
 def env():
     database = _test_database_config()
-    settings = Settings(database, "a"*40, "b"*40, "lab@example.com", "fake-test-token",
-                        allowed_repositories=("jvidelaolmos/jira-event-layer-lab",),
+    settings = Settings(database, "a"*40, "b"*40, bitbucket_token="fake-test-token",
                         tenant="test-installation")
     migrate(database, settings.tenant)
     store = Store(database)
@@ -170,10 +169,13 @@ def test_disable_prevents_new_matches(env):
     assert ingest(client)["runs"] == []
 
 
-def test_target_allowlist(env):
+def test_rule_destination_is_not_restricted_by_server_configuration(env):
     client, _, _ = env
     response = client.post("/v1/rules", content=YAML.replace("workspace: jvidelaolmos", "workspace: other-company"))
-    assert response.status_code == 422
+    assert response.status_code == 201
+    saved = response.json()
+    assert client.post(f'/v1/rules/{saved["name"]}/activate',
+                       json={"version": saved["version"], "sha256": saved["sha256"]}).status_code == 200
 
 
 def worker_for(store, settings, handler):

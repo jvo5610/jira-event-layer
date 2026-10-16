@@ -1,6 +1,8 @@
 """Bounded Jira REST v3 adapter. No arbitrary URL, scripts, bulk writes or blind retries."""
 import json
 import re
+import threading
+import time
 from copy import deepcopy
 from uuid import UUID
 
@@ -94,19 +96,72 @@ class Jira:
     def __init__(self, settings, client=None):
         self.settings = settings
         self.client = client or httpx.Client(timeout=20, follow_redirects=False)
+        self._token_lock = threading.Lock()
+        self._access_token = ""
+        self._token_expires_at = 0.0
+        self._oauth_credential = None
+
+    def access_token(self):
+        s = self.settings
+        if not s.jira_client_id and not s.jira_client_secret:
+            if not s.jira_token:
+                raise RuleError("jira_credentials_missing")
+            return s.jira_token
+        if not s.jira_client_id or not s.jira_client_secret:
+            raise RuleError("jira_oauth_credentials_incomplete")
+        from app.actors import credential_key
+        credential = credential_key(s)
+        with self._token_lock:
+            if (self._access_token and self._oauth_credential == credential
+                    and time.monotonic() < self._token_expires_at):
+                return self._access_token
+            started = time.monotonic()
+            try:
+                response = bounded_request(self.client, "POST", "https://auth.atlassian.com/oauth/token",
+                    max_bytes=32768, data={"grant_type": "client_credentials",
+                        "client_id": s.jira_client_id, "client_secret": s.jira_client_secret},
+                    headers={"Accept": "application/json"}, follow_redirects=False)
+            except httpx.HTTPError:
+                raise PreflightRetry() from None
+            if response.status_code == 429 or response.status_code >= 500:
+                raise PreflightRetry(retry_delay(response))
+            if response.status_code != 200:
+                raise RuleError(f"jira_oauth_http_{response.status_code}")
+            try:
+                data = response.json()
+                token, expires = data["access_token"], data["expires_in"]
+                if (not isinstance(token, str) or not 1 <= len(token) <= 16384
+                        or any(ord(c) < 33 or ord(c) > 126 for c in token)
+                        or type(expires) is not int or not 1 <= expires <= 86400
+                        or str(data.get("token_type", "")).lower() != "bearer"):
+                    raise ValueError()
+            except (ValueError, KeyError, TypeError):
+                raise RuleError("jira_oauth_invalid_response") from None
+            self._access_token = token
+            self._oauth_credential = credential
+            self._token_expires_at = started + expires - min(60, expires / 10)
+            return token
 
     def request(self, method, path, body=None):
         s = self.settings
-        if not s.jira_token:
-            raise RuleError("jira_credentials_missing")
         try:
             cloud_id = str(UUID(s.jira_cloud_id))
         except ValueError:
             raise RuleError("jira_cloud_id_invalid") from None
-        # Scoped API tokens use Atlassian's gateway; user input never controls the host.
-        return bounded_request(self.client, method, f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/{path}",
-                                   json=body,
-                                   headers={"Accept": "application/json", "Authorization": f"Bearer {s.jira_token}"})
+        # OAuth and scoped API tokens use the fixed gateway; rules cannot change the host.
+        url = f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/{path}"
+        token = self.access_token()
+        response = bounded_request(self.client, method, url, json=body,
+            headers={"Accept": "application/json", "Authorization": f"Bearer {token}"}, follow_redirects=False)
+        if response.status_code == 401 and s.jira_client_id:
+            with self._token_lock:
+                if self._access_token == token:
+                    self._access_token = ""
+            # A read can safely refresh once. Never automatically replay a mutation.
+            if method == "GET":
+                response = bounded_request(self.client, method, url, json=body,
+                    headers={"Accept": "application/json", "Authorization": f"Bearer {self.access_token()}"}, follow_redirects=False)
+        return response
 
     def read(self, path):
         try:

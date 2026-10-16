@@ -27,9 +27,9 @@ x-database: &database
 x-environment: &environment
   <<: *database
   TENANT_ID: ${TENANT_ID:?Set a stable TENANT_ID for this installation}
-  ALLOWED_REPOSITORIES: ${ALLOWED_REPOSITORIES:-}
-  BITBUCKET_ACCOUNT_EMAIL: ${BITBUCKET_ACCOUNT_EMAIL:-}
   BITBUCKET_API_TOKEN_FILE: /run/secrets/bitbucket_api_token
+  JIRA_CLIENT_ID: ${JIRA_CLIENT_ID:-}
+  JIRA_CLIENT_SECRET_FILE: /run/secrets/jira_client_secret
   JIRA_API_TOKEN_FILE: /run/secrets/jira_api_token
   JIRA_CLOUD_ID: ${JIRA_CLOUD_ID:-}
   JIRA_MAX_DAILY_WRITES: ${JIRA_MAX_DAILY_WRITES:-100}
@@ -72,7 +72,7 @@ services:
       ADMIN_BOOTSTRAP_TOKEN_FILE: /run/secrets/admin_bootstrap_token
       JIRA_WEBHOOK_SECRET_FILE: /run/secrets/jira_webhook_secret
       AUTH_ROTATION_TTL_SECONDS: ${AUTH_ROTATION_TTL_SECONDS:-3600}
-    secrets: [db_runtime_password, admin_bootstrap_token, jira_webhook_secret, bitbucket_api_token, jira_api_token]
+    secrets: [db_runtime_password, admin_bootstrap_token, jira_webhook_secret, bitbucket_api_token, jira_api_token, jira_client_secret]
     ports: ["127.0.0.1:${API_PORT:-8088}:8080"]
     depends_on:
       migrate: {condition: service_completed_successfully}
@@ -85,7 +85,7 @@ services:
     <<: *runtime
     command: [python, -m, app.worker]
     environment: *environment
-    secrets: [db_runtime_password, bitbucket_api_token, jira_api_token]
+    secrets: [db_runtime_password, bitbucket_api_token, jira_api_token, jira_client_secret]
     depends_on:
       migrate: {condition: service_completed_successfully}
     healthcheck:
@@ -112,3 +112,5 @@ secrets:
     file: ${AUTOMATION_SECRETS_DIR:-./secrets}/bitbucket_api_token
   jira_api_token:
     file: ${AUTOMATION_SECRETS_DIR:-./secrets}/jira_api_token
+  jira_client_secret:
+    file: ${AUTOMATION_SECRETS_DIR:-./secrets}/jira_client_secret

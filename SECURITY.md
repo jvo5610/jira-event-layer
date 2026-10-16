@@ -17,7 +17,7 @@ Provide the commit, affected configuration, impact and a minimal redacted reprod
 
 - The single API serves management and signed webhooks on the same port. Use a TLS proxy/WAF
   to restrict management paths; application Bearer authorization and webhook HMAC remain independent.
-- Use dedicated provider identities, Jira project permissions, scoped rules, repository allowlists and write budgets.
+- Use dedicated provider identities, provider permissions scoped to the required Jira projects and Bitbucket repositories, scoped rules and write budgets. Bitbucket repository access is enforced by the provider token, not a server-side repository list.
 - Inject credentials at runtime, preferably through mounted secrets; never put them in YAML rules.
 - Flow labels identify provenance, not authorization. No label is required to operate a ticket.
 - Review ambiguous writes manually; never blindly replay them.

@@ -1,5 +1,6 @@
 """Global actor exclusion. Never infer the actor from issue creator/reporter/assignee."""
 import hashlib
+import json
 import re
 from uuid import UUID
 
@@ -12,6 +13,15 @@ def account_id(value):
 
 
 def credential_key(settings):
+    client_id = getattr(settings, 'jira_client_id', '')
+    client_secret = getattr(settings, 'jira_client_secret', '')
+    if client_id or client_secret:
+        if not client_id or not client_secret:
+            raise ValueError('Complete Jira OAuth credentials required to verify service identity')
+        # Access tokens rotate hourly; the durable account identity is tied to
+        # the OAuth client credentials, never to an ephemeral access token.
+        credential = json.dumps(['oauth-client-credentials', client_id, client_secret]).encode()
+        return str(UUID(settings.jira_cloud_id)), hashlib.sha256(credential).hexdigest()
     if not settings.jira_token:
         raise ValueError('Jira credentials required to verify service identity')
     return str(UUID(settings.jira_cloud_id)), hashlib.sha256(settings.jira_token.encode()).hexdigest()

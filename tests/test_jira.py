@@ -203,10 +203,10 @@ def test_forbidden_fields_rejected_at_parse(field):
 
 def test_projects_and_customfields_do_not_require_server_allowlists():
     rule = rule_for([ACTIONS[0]])
-    Settings("", "", "").check_targets(rule)
+    assert rule.actions[0].project == "DEMO"
     action = copy.deepcopy(ACTIONS[2])
     action["fields"] = {"customfield_999": {"value": "x"}}
-    config().check_targets(rule_for([action]))
+    assert "customfield_999" in rule_for([action]).actions[0].fields
 
 
 @pytest.mark.parametrize('project', ['DEMO', 'OTHER'])
@@ -364,6 +364,4 @@ def test_update_can_remove_old_managed_label():
 def test_lifecycle_example_parses():
     from pathlib import Path
     rule, _ = parse_rule(Path("examples/jira-create-from-source.yaml").read_text())
-    settings = config()
-    settings.check_targets(rule)
     assert len(rule.actions) == 10

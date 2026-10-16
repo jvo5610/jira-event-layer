@@ -23,10 +23,11 @@ from test_integration import activate, env, webhook_client, ingest, YAML, EVENT
 def configuration(monkeypatch):
     # Isolate all environment inputs, never consume developer/provider credentials.
     names = {"DATABASE_URL", "DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD", "ADMIN_BOOTSTRAP_TOKEN", "JIRA_WEBHOOK_SECRET", "BITBUCKET_API_TOKEN", "JIRA_API_TOKEN",
+             "JIRA_CLIENT_ID", "JIRA_CLIENT_SECRET", "JIRA_CLOUD_ID", "ENV_FILE",
              "BITBUCKET_ACCOUNT_EMAIL", "JIRA_ACCOUNT_EMAIL", "BITBUCKET_EMAIL", "BITBUCKET_TOKEN",
              "JIRA_EMAIL", "JIRA_TOKEN",
              "API_TOKEN", "ADMIN_TOKEN", "READER_TOKEN", "WRITER_TOKEN", "OPERATOR_TOKEN", "TENANT_ID", "AUTH_ROTATION_TTL_SECONDS",
-             "ALLOWED_REPOSITORIES", "MAX_BODY_BYTES",
+             "MAX_BODY_BYTES",
              "JIRA_MAX_DAILY_WRITES", "BITBUCKET_MAX_DAILY_WRITES"}
     for name in names:
         monkeypatch.delenv(name, raising=False)
@@ -44,7 +45,6 @@ def configuration(monkeypatch):
 def test_portable_default_configuration(configuration):
     cfg = Settings.from_env()
     assert cfg.tenant == "independent-installation"
-    assert cfg.allowed_repositories == ()
     assert cfg.max_body == 10485760
     assert "example-workspace" not in repr(cfg)
     assert "a" * 40 not in repr(cfg) and "db-test-password" not in repr(cfg)
@@ -94,11 +94,9 @@ def test_compose_keeps_migrator_credentials_out_of_runtime():
 
 
 def test_v1_connector_environment_names(configuration):
-    configuration.setenv("BITBUCKET_ACCOUNT_EMAIL", "bitbucket@example.com")
     configuration.setenv("BITBUCKET_API_TOKEN", "bitbucket-secret")
     configuration.setenv("JIRA_API_TOKEN", "jira-secret")
     cfg = Settings.from_env()
-    assert cfg.bitbucket_email == "bitbucket@example.com"
     assert cfg.bitbucket_token == "bitbucket-secret"
     assert cfg.jira_token == "jira-secret"
 
@@ -106,6 +104,7 @@ def test_v1_connector_environment_names(configuration):
 @pytest.mark.parametrize("name", [
     "BITBUCKET_EMAIL", "BITBUCKET_TOKEN", "BITBUCKET_TOKEN_FILE",
     "JIRA_EMAIL", "JIRA_TOKEN", "JIRA_TOKEN_FILE",
+    "BITBUCKET_ACCOUNT_EMAIL", "ALLOWED_REPOSITORIES",
 ])
 def test_legacy_connector_environment_names_are_rejected(configuration, name):
     configuration.setenv(name, "legacy")

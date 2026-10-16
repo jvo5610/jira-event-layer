@@ -24,7 +24,7 @@ Jira Relay, el frontend `jira-relay-studio` y el contrato YAML `automation/v1`. 
 | Entender componentes y recorrido de un evento | [Modelo de ejecución](#modelo-de-ejecución) y [componentes](#componentes) |
 | Probar un clon sin cuentas externas | [Quick start](#quick-start) |
 | Instalar servicios separados | [Instalación sin Compose](#instalación-como-servicios-independientes-sin-compose) y [variables por servicio](#mapa-por-servicio) |
-| Conectar Jira de verdad | [Token Bearer](#api-token-de-cuenta-de-servicio-bearer) y [webhook firmado](#conectar-el-webhook-real-de-jira) |
+| Conectar Jira de verdad | [OAuth / API token](#autenticación-jira-oauth-y-api-token) y [webhook firmado](#conectar-el-webhook-real-de-jira) |
 | Crear, probar y activar una regla | [Primer flujo](#primer-flujo-asignación-y-descripción) y [guía HTTP reproducible](docs/technical-reference.md#recorrido-http-validar-evaluar-guardar-y-activar) |
 | Aprender todas las variantes YAML | [DSL y filtros](#yaml-y-filtros), [referencia de acciones](docs/technical-reference.md#acciones-entradas-y-resultados) y [catálogo comentado](examples/all-v1-variations.yaml) |
 | Usar el editor y sus sugerencias | [Guía de Studio](docs/studio.md) |
@@ -60,6 +60,22 @@ compartir una DB entre empresas. No es el Jira Cloud ID. Los checksums de reglas
 migraciones tienen finalidades distintas: [detalle técnico](docs/technical-reference.md#datos-checksums-y-tenant).
 
 ## Quick start
+
+### Configuración desde variables o un archivo montado
+
+API, worker, migraciones y herramientas de operación aceptan variables de entorno
+directas. También se puede definir `ENV_FILE` con la ruta de un archivo dotenv
+montado, por ejemplo `ENV_FILE=/app/.env`. El código Python carga ese archivo antes
+de validar la configuración; no hace falta un wrapper ni ejecutar `source`.
+
+Las variables ya presentes en el proceso tienen prioridad por clave, incluso si
+están vacías. Se conservan los secretos individuales mediante `DB_PASSWORD_FILE`,
+`JIRA_WEBHOOK_SECRET_FILE` y los demás parámetros `_FILE`.
+Sin `ENV_FILE` no se busca ni carga automáticamente ningún `.env`. Un archivo
+configurado que no puede leerse impide el arranque. Se admite UTF-8 (hasta 1 MiB),
+comentarios y valores entre comillas; no se ejecuta shell ni se expanden `$VAR`
+o `${VAR}`, para preservar contraseñas literales. Los valores se cargan al iniciar
+cada proceso: reiniciarlo después de cambiar el archivo montado.
 
 For the optional, runtime-configured visual editor, see
 [jira-relay-studio](docs/studio.md). The same image runs against any configured backend,
@@ -136,10 +152,11 @@ uv run python tools/e2e_live.py --provider jira --output work/e2e-jira \
 ```
 
 Las únicas variables de entorno del proveedor son las conexiones normales:
-BITBUCKET_ACCOUNT_EMAIL/BITBUCKET_API_TOKEN y
-JIRA_API_TOKEN/JIRA_CLOUD_ID. Jira utiliza Bearer con un API token de cuenta de servicio compatible; no requiere email.
+BITBUCKET_API_TOKEN (Access Token de repositorio o workspace, sin email) y
+JIRA_CLIENT_ID/JIRA_CLIENT_SECRET/JIRA_CLOUD_ID (OAuth de cuenta de servicio).
+Como alternativa compatible, Jira admite JIRA_API_TOKEN/JIRA_CLOUD_ID sin OAuth; no combinar ambos modos.
 La versión 1 no acepta los nombres anteriores; los tokens también admiten
-BITBUCKET_API_TOKEN_FILE y JIRA_API_TOKEN_FILE.
+BITBUCKET_API_TOKEN_FILE, JIRA_CLIENT_SECRET_FILE y JIRA_API_TOKEN_FILE.
 Los destinos se pasan explícitamente como argumentos; no se leen variables E2E_* ni TEST_*.
 La autorización para escribir también es un argumento obligatorio para ejecutar, no una variable persistente.
 No pegar tokens en comandos ni en YAML: cargarlos mediante el gestor de secretos del operador.
@@ -461,7 +478,8 @@ el catálogo acotado del evento de esa misma ejecución. No ejecuta acciones ni 
 Sin resultados devuelve `sample:false`, no valores ficticios. El editor descarta muestras
 si cambian el trigger, el filtro o los pasos anteriores; indica siempre versión y ejecución.
 
-El conector requiere JIRA_API_TOKEN y JIRA_CLOUD_ID.
+El conector requiere JIRA_CLIENT_ID, JIRA_CLIENT_SECRET y JIRA_CLOUD_ID para OAuth,
+o JIRA_API_TOKEN y JIRA_CLOUD_ID como alternativa estática; no combinar ambos modos.
 Usa exclusivamente https://api.atlassian.com/ex/jira/{cloudId}/rest/api/3.
 No se exige ni agrega una etiqueta de alcance a los tickets. El proyecto real de cada tarjeta se verifica antes de actuar.
 Los proyectos/campos se especifican en el YAML y Jira aplica los permisos de la cuenta.
@@ -477,7 +495,29 @@ variables YAML no pueden definirlo. Las propiedades históricas de texto/id sigu
 del formato anterior: no se reescriben ni se usan como autorización. Las propiedades de Jira son
 visibles a usuarios/apps con acceso: no contienen secretos. El histórico completo permanece en Postgres.
 
-### API token de cuenta de servicio (Bearer)
+### Autenticación Jira: OAuth y API token
+
+La opción recomendada es OAuth 2.0 de cuenta de servicio: configurar `JIRA_CLIENT_ID`,
+`JIRA_CLIENT_SECRET` (o `JIRA_CLIENT_SECRET_FILE`) y `JIRA_CLOUD_ID` (UUID del sitio).
+Crear una credencial **OAuth 2.0** en **Directory → Service accounts → Create credentials**,
+con los permisos de la cuenta y scopes indicados abajo. No es una aplicación OAuth 3LO:
+no necesita email, callback ni refresh token.
+
+El worker obtiene el token con `client_credentials` en
+`https://auth.atlassian.com/oauth/token`, lo conserva sólo en memoria y lo renueva antes
+del vencimiento. La identidad de servicio permanece estable entre renovaciones. Una lectura
+con `401` puede refrescar y reintentarse una vez; las escrituras no se reenvían automáticamente.
+No configurar `JIRA_API_TOKEN` junto con OAuth. `JIRA_WEBHOOK_SECRET` sigue siendo independiente.
+
+```dotenv
+JIRA_CLIENT_ID=<client-id-de-la-cuenta-de-servicio>
+JIRA_CLIENT_SECRET_FILE=/run/secrets/jira_client_secret
+JIRA_CLOUD_ID=<cloud-id-del-sitio-jira>
+```
+
+Referencia: [OAuth de cuentas de servicio (Atlassian)](https://support.atlassian.com/user-management/docs/create-oauth-2-0-credential-for-service-accounts/).
+
+#### Alternativa compatible: API token estático
 
 Jira Relay envía un API token de cuenta de servicio como `Authorization: Bearer <token>`.
 Bearer es la forma de enviar el API token, no otra credencial ni un flujo OAuth.
@@ -727,7 +767,8 @@ No se necesita instalar Docker CLI, AWS SDK ni kubectl dentro de los servicios.
    `uv sync --frozen --no-dev`; los comandos siguientes corren dentro del entorno instalado.
 3. Inyectar los [parámetros de cada servicio](#mapa-por-servicio), no un `.env` completo en todos.
    Usar el mismo `TENANT_ID` y DB en API y worker. Nunca montar la credencial del
-   migrador en procesos runtime. El código no carga `.env` ni consulta gestores cloud.
+   migrador en procesos runtime. Sólo se carga un dotenv si se configura `ENV_FILE`;
+   no se consulta un gestor cloud desde el motor.
 4. Con variables del **migrador**, ejecutar `python -m app.migrate --status` y
    `python -m app.migrate`. No iniciar runtime antes de completar este trabajo.
 5. Conectar `psql` como propietario y ejecutar:
@@ -777,7 +818,7 @@ Para Compose con PostgreSQL administrado por el operador:
    contraseñas sin mostrarlas y genera los archivos `db_runtime_password` y `db_migrator_password`.
    Se niega a sobrescribir un directorio existente. Genera un único archivo `admin_bootstrap_token`;
    los tokens de conectores opcionales empiezan vacíos.
-4. Configurar allowlists, cloud ID e identidad de servicio (email sólo para Bitbucket). Cargar credenciales de conectores en los
+4. Configurar cloud ID y credenciales OAuth de servicio Jira, y Access Token Bitbucket sin email. Cargar credenciales de conectores en los
    archivos privados, nunca en YAML de reglas. Los secretos se resuelven primero desde NAME;
    sólo si no está definida se lee el archivo indicado por NAME_FILE. Si ambas existen gana NAME,
    sin abrir el archivo. Un valor directo vacío no activa el fallback y los secretos obligatorios fallan.
@@ -823,7 +864,9 @@ en los manifests como fuente de verdad. Los despliegues particulares no deben co
 
 ## Parámetros de configuración (inventario completo)
 
-La aplicación no carga archivos `.env` por sí sola: el operador o Compose inyecta las variables.
+API, worker, migrador y mantenimiento aceptan `ENV_FILE` explícito o variables inyectadas
+por el operador. No se busca `.env` implícitamente. Studio usa su configuración independiente
+y no carga `ENV_FILE`; el operador debe inyectar sus variables o secretos `_FILE`.
 Los parámetros no secretos se configuran directamente. Los secretos marcados con **†** admiten
 el nombre directo o el mismo nombre terminado en `_FILE`: gana el directo si está definido,
 incluso si está vacío; sólo si no existe se lee el archivo UTF-8. No hay fallback a una credencial
@@ -861,11 +904,10 @@ AUTH_ROTATION_TTL_SECONDS=3600
 MAX_BODY_BYTES=10485760
 # Opcionales: permiten mostrar el estado del conector en el catálogo.
 JIRA_CLOUD_ID=<cloud-id-jira>
-JIRA_API_TOKEN=<token-jira>
-# Sólo si se utiliza Bitbucket; la API valida los repositorios de las reglas.
-BITBUCKET_ACCOUNT_EMAIL=<email-bitbucket>
+JIRA_CLIENT_ID=<client-id-jira>
+JIRA_CLIENT_SECRET=<client-secret-jira>
+# Opcional: indica credenciales declaradas aquí; la autorización remota la hace Bitbucket.
 BITBUCKET_API_TOKEN=<token-bitbucket>
-ALLOWED_REPOSITORIES=<workspace/repositorio>
 ```
 
 Bootstrap sólo es necesario para registrar el primer administrador en una DB no inicializada.
@@ -889,12 +931,11 @@ DB_NAME=jira_relay
 DB_USER=jira_relay_runtime
 DB_PASSWORD=<secreto-runtime>
 JIRA_CLOUD_ID=<cloud-id-jira>
-JIRA_API_TOKEN=<token-jira>
+JIRA_CLIENT_ID=<client-id-jira>
+JIRA_CLIENT_SECRET=<client-secret-jira>
 JIRA_MAX_DAILY_WRITES=100
 # Sólo si se utiliza Bitbucket.
-BITBUCKET_ACCOUNT_EMAIL=<email-bitbucket>
 BITBUCKET_API_TOKEN=<token-bitbucket>
-ALLOWED_REPOSITORIES=<workspace/repositorio>
 BITBUCKET_MAX_DAILY_WRITES=100
 # Omitir para usar el hostname; si se configura, debe ser único por worker.
 # WORKER_ID=<identidad-unica-del-worker>
@@ -902,7 +943,9 @@ BITBUCKET_MAX_DAILY_WRITES=100
 
 No necesita bootstrap, secreto de webhook ni configuración Studio. No expone un servidor HTTP.
 No necesita `MAX_BODY_BYTES` ni `AUTH_ROTATION_TTL_SECONDS`.
-Para deshabilitar Jira, omitir su token. Sin repositorios Bitbucket permitidos, no se despachan pipelines.
+Para deshabilitar Jira, omitir sus credenciales. Para despachar pipelines Bitbucket, el worker
+necesita un Access Token con Pipelines Read/Write sobre el repositorio de la regla.
+Se envía como Bearer sin email; no requiere permisos de webhook para lanzar o consultar runs.
 
 #### `migrate`: trabajo de migración previo al arranque
 
@@ -950,8 +993,8 @@ respuesta; no hay un `MAX_BODY_BYTES` propio de Studio.
 
 | Servicio | Archivos montados en `/run/secrets/` |
 | --- | --- |
-| `api` | `db_runtime_password`, `admin_bootstrap_token`, `jira_webhook_secret`, `jira_api_token`, `bitbucket_api_token` |
-| `worker` | `db_runtime_password`, `jira_api_token`, `bitbucket_api_token` |
+| `api` | `db_runtime_password`, `admin_bootstrap_token`, `jira_webhook_secret`, `jira_client_secret`, `jira_api_token`, `bitbucket_api_token` |
+| `worker` | `db_runtime_password`, `jira_client_secret`, `jira_api_token`, `bitbucket_api_token` |
 | `migrate` | `db_migrator_password` |
 | `studio` | `gui_api_token`, `studio_login_password` |
 
@@ -973,6 +1016,7 @@ y `DB_PASSWORD`/`DB_PASSWORD_FILE`, sin credenciales de proveedores.
 | Parámetro | Obligatorio / valor predeterminado | Uso |
 | --- | --- | --- |
 | `TENANT_ID` | Obligatorio; 1–100 caracteres seguros | Identidad inmutable de esta instalación en su DB. No es el Cloud ID de Jira. |
+| `ENV_FILE` | Opcional; sin búsqueda automática | Ruta de dotenv UTF-8 montado de hasta 1 MiB, cargado al iniciar; variables del proceso ganan por clave, incluso vacías. No es configuración de Studio. |
 | `DB_HOST` | Obligatorio | Host de PostgreSQL visto desde el proceso/contenedor. |
 | `DB_PORT` | `5432`; rango 1–65535 | Puerto de PostgreSQL. |
 | `DB_NAME` | Obligatorio | Base dedicada a la instalación. |
@@ -1002,7 +1046,9 @@ sin una env var nueva por token y sin RBAC individual de usuarios de GUI por aho
 
 | Parámetro | Obligatorio / valor predeterminado | Uso |
 | --- | --- | --- |
-| `JIRA_API_TOKEN` **†** | Para ejecutar acciones Jira | API token de cuenta de servicio enviado como Bearer; sin email. |
+| `JIRA_CLIENT_ID` | Para Jira mediante OAuth | Client ID de cuenta de servicio, flujo `client_credentials`. |
+| `JIRA_CLIENT_SECRET` **†** | Junto con `JIRA_CLIENT_ID` | Client secret; token temporal obtenido y renovado sólo en memoria. |
+| `JIRA_API_TOKEN` **†** | Alternativa sin OAuth | API token estático Bearer; no combinar con las credenciales OAuth. |
 | `JIRA_CLOUD_ID` | Para ejecutar acciones Jira | UUID del sitio Jira Cloud. |
 | `JIRA_MAX_DAILY_WRITES` | `100`; rango 1–100000 | Intentos de escritura por ventana móvil de 24 h, compartidos en DB. |
 
@@ -1010,10 +1056,23 @@ sin una env var nueva por token y sin RBAC individual de usuarios de GUI por aho
 
 | Parámetro | Obligatorio / valor predeterminado | Uso |
 | --- | --- | --- |
-| `BITBUCKET_ACCOUNT_EMAIL` | Para ejecutar pipelines | Cuenta asociada al API token de Bitbucket. |
-| `BITBUCKET_API_TOKEN` **†** | Para ejecutar pipelines | Credencial del proveedor; Bitbucket conserva su autenticación actual. |
-| `ALLOWED_REPOSITORIES` | Vacío: ningún repositorio habilitado | Lista `workspace/repository`, separada por comas. |
+| `BITBUCKET_API_TOKEN` **†** | Para ejecutar pipelines | Access Token de repositorio, proyecto o workspace con Pipelines Read/Write, enviado como Bearer sin email. |
 | `BITBUCKET_MAX_DAILY_WRITES` | `100`; rango 1–100000 | Presupuesto compartido de intentos de despacho por 24 h. |
+
+Los Workspace Access Tokens requieren un plan Bitbucket Premium. Verificar su disponibilidad
+antes de migrar: un API token personal anterior que usa Basic con email no se convierte en
+Workspace Access Token por enviarlo como Bearer. Esta release cambia ese contrato; no desplegar
+el conector nuevo con la credencial anterior sin validarla. Ver
+[tokens de workspace](https://support.atlassian.com/bitbucket-cloud/docs/workspace-access-tokens/).
+Para una instalación que opera un único repositorio, se puede usar un Repository Access Token:
+el conector usa el mismo Bearer y Bitbucket limita su alcance a ese repo. No requiere Premium
+ni permisos de escritura sobre código, webhooks o variables: conceder sólo Pipelines Read/Write.
+No habilita otros repositorios por agregarlos al YAML. Si se necesita operar varios repositorios,
+evaluar el token de proyecto/workspace y su plan, sin ampliar el alcance silenciosamente.
+Ver [tipos y alcance de Access Tokens](https://support.atlassian.com/bitbucket-cloud/docs/access-tokens/).
+`BITBUCKET_ACCOUNT_EMAIL` y `ALLOWED_REPOSITORIES` se rechazan al arrancar: eliminarlos
+de la configuración anterior. No hay conversión silenciosa de Basic a Bearer ni una allowlist
+que parezca activa cuando ya no se usa; el alcance efectivo lo autoriza el token de Bitbucket.
 
 ### GUI (proceso opcional)
 
