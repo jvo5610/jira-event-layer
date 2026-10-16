@@ -15,6 +15,8 @@ LEGACY_CONNECTOR_ENV = (
     "BITBUCKET_EMAIL",
     "BITBUCKET_TOKEN",
     "BITBUCKET_TOKEN_FILE",
+    "BITBUCKET_ACCOUNT_EMAIL",
+    "ALLOWED_REPOSITORIES",
 )
 
 
@@ -120,6 +122,25 @@ def jira_configured(settings):
                 (getattr(settings, "jira_client_id", "") and getattr(settings, "jira_client_secret", "")))
 
 
+def jira_credentials_from_env():
+    """One auth contract shared by services and the opt-in live runner."""
+    load_environment()
+    values = {"jira_token": secret("JIRA_API_TOKEN"),
+              "jira_cloud_id": os.getenv("JIRA_CLOUD_ID", ""),
+              "jira_client_id": secret("JIRA_CLIENT_ID"),
+              "jira_client_secret": secret("JIRA_CLIENT_SECRET")}
+    if bool(values["jira_client_id"]) != bool(values["jira_client_secret"]):
+        raise RuntimeError("JIRA_CLIENT_ID and JIRA_CLIENT_SECRET must be configured together")
+    if values["jira_client_id"]:
+        if values["jira_token"]:
+            raise RuntimeError("Choose Jira OAuth credentials or JIRA_API_TOKEN, not both")
+        try:
+            values["jira_cloud_id"] = str(UUID(values["jira_cloud_id"]))
+        except ValueError:
+            raise RuntimeError("JIRA_CLOUD_ID must be a valid UUID when Jira OAuth is configured") from None
+    return values
+
+
 @dataclass
 class Settings:
     database: dict = field(repr=False)
@@ -155,19 +176,8 @@ class Settings:
             raise RuntimeError("Webhook secret must contain at least 32 ASCII characters")
         settings.auth_rotation_ttl = integer("AUTH_ROTATION_TTL_SECONDS", 3600, 60, 86400)
         settings.max_body = integer("MAX_BODY_BYTES", 10485760, 1024, 10485760)
-        settings.jira_token = secret("JIRA_API_TOKEN")
-        settings.jira_cloud_id = os.getenv("JIRA_CLOUD_ID", "")
-        settings.jira_client_id = secret("JIRA_CLIENT_ID")
-        settings.jira_client_secret = secret("JIRA_CLIENT_SECRET")
-        if bool(settings.jira_client_id) != bool(settings.jira_client_secret):
-            raise RuntimeError("JIRA_CLIENT_ID and JIRA_CLIENT_SECRET must be configured together")
-        if settings.jira_client_id:
-            if settings.jira_token:
-                raise RuntimeError("Choose Jira OAuth credentials or JIRA_API_TOKEN, not both")
-            try:
-                settings.jira_cloud_id = str(UUID(settings.jira_cloud_id))
-            except ValueError:
-                raise RuntimeError("JIRA_CLOUD_ID must be a valid UUID when Jira OAuth is configured") from None
+        for name, value in jira_credentials_from_env().items():
+            setattr(settings, name, value)
         settings.jira_max_daily_writes = integer("JIRA_MAX_DAILY_WRITES", 100, 1, 100000)
         settings.bitbucket_max_daily_writes = integer("BITBUCKET_MAX_DAILY_WRITES", 100, 1, 100000)
         return settings

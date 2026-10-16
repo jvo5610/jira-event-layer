@@ -12,6 +12,7 @@ from app.config import Settings, jira_configured
 from app.dsl import RuleError
 from app.jira import Jira, PreflightRetry
 from test_runtime import configuration
+from test_integration import env
 
 CLOUD = "11111111-1111-4111-8111-111111111111"
 
@@ -185,3 +186,59 @@ def test_expired_access_token_retries_only_reads(method, expected_grants, expect
     with httpx.Client(transport=httpx.MockTransport(provider)) as client:
         Jira(oauth_settings(), client).request(method, "issue")
     assert len(grants) == expected_grants and len(calls) == expected_calls
+
+
+def test_oversized_oauth_response_never_reaches_a_jira_write():
+    calls = []
+    def provider(request):
+        calls.append(request)
+        return httpx.Response(200, content=b'x' * 32769)
+    with httpx.Client(transport=httpx.MockTransport(provider)) as client:
+        with pytest.raises(PreflightRetry):
+            Jira(oauth_settings(), client).request('POST', 'issue', {})
+    assert len(calls) == 1 and calls[0].url.host == 'auth.atlassian.com'
+
+
+def test_live_runner_rejects_mixed_jira_credentials_from_env_file(configuration, tmp_path, monkeypatch):
+    from tools.e2e_live import parse_args, run
+    path = tmp_path / 'providers.env'
+    path.write_text(f'JIRA_CLOUD_ID={CLOUD}\nJIRA_CLIENT_ID=client-test-only\n'
+                    'JIRA_CLIENT_SECRET=secret-test-only\nJIRA_API_TOKEN=static-test-only\n')
+    configuration.setenv('ENV_FILE', str(path))
+    monkeypatch.setattr('tools.e2e_live.command', lambda *args, **kwargs: pytest.fail('must not create resources'))
+    args = parse_args(['--provider', 'jira', '--output', str(tmp_path / 'evidence'),
+        '--allow-remote-writes', '--jira-project', 'KAN', '--jira-issue-type-id', '10003',
+        '--jira-initial-status-id', '10000', '--jira-target-status-id', '10003', '--jira-link-type-id', '10000'])
+    with pytest.raises(RuntimeError, match='not both'):
+        run(args)
+    assert not (tmp_path / 'evidence').exists()
+
+
+def test_oauth_worker_registration_blocks_self_events_across_refresh(env):
+    from app.worker import Worker
+    client, store, cfg = env
+    cfg.jira_client_id, cfg.jira_client_secret, cfg.jira_cloud_id = 'worker-client', 'worker-secret', CLOUD
+    calls = []
+    def provider(request):
+        calls.append(request)
+        if request.url.host == 'auth.atlassian.com':
+            return grant('temporary-access-' + str(len(calls)))
+        return httpx.Response(200, json={'accountId':'oauth-service-actor', 'active':True})
+    with httpx.Client(transport=httpx.MockTransport(provider)) as http:
+        jira = Jira(cfg, http)
+        worker = Worker(store, cfg, jira=jira)
+        worker.ensure_service_identity()
+        assert store.jira_actor_for_credential(cfg) == 'oauth-service-actor'
+        jira._token_expires_at = 0
+        jira.read('myself')
+        worker.ensure_service_identity()
+        # A restarted worker also uses the durable identity, not the short-lived token.
+        Worker(store, cfg, jira=jira).ensure_service_identity()
+    assert len(calls) == 4  # Two grants and two read-only /myself calls.
+    result = client.post('/v1/events', headers={'Idempotency-Key':'oauth-self-event'},
+        json={'source':'jira', 'event_type':'jira:issue_created',
+              'payload':{'user':{'accountId':'oauth-service-actor'},'issue':{'key':'KAN-1'}}})
+    assert result.status_code == 202
+    assert result.json()['ignored_reason'] == 'ignored_service_actor'
+    assert result.json()['runs'] == []
+    assert client.post('/v1/events/' + result.json()['event_id'] + '/execute').status_code == 409

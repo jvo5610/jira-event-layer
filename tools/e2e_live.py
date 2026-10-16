@@ -91,6 +91,8 @@ def execute_case(client, actions, label, marker, timeout=240):
 def run(args):
     if not args.allow_remote_writes:
         raise RuntimeError("Live acceptance creates remote resources. Pass --allow-remote-writes explicitly")
+    from app.config import load_environment, jira_credentials_from_env
+    load_environment()
     stamp = uuid.uuid4().hex[:12]
     name = "automation-live-" + stamp
     config = {"TENANT_ID": name, "ADMIN_BOOTSTRAP_TOKEN": secrets.token_urlsafe(48),
@@ -104,7 +106,8 @@ def run(args):
         pipeline = args.bitbucket_pipeline
         branch = args.bitbucket_branch
     if args.provider in {"jira", "all"}:
-        if any(os.getenv(key) or os.getenv(key + "_FILE") for key in ("JIRA_CLIENT_ID", "JIRA_CLIENT_SECRET")):
+        jira_credentials = jira_credentials_from_env()
+        if jira_credentials['jira_client_id']:
             credential_names = ("JIRA_CLIENT_ID", "JIRA_CLIENT_SECRET", "JIRA_CLOUD_ID")
         else:
             credential_names = ("JIRA_API_TOKEN", "JIRA_CLOUD_ID")

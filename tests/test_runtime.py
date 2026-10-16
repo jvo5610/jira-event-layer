@@ -104,6 +104,7 @@ def test_v1_connector_environment_names(configuration):
 @pytest.mark.parametrize("name", [
     "BITBUCKET_EMAIL", "BITBUCKET_TOKEN", "BITBUCKET_TOKEN_FILE",
     "JIRA_EMAIL", "JIRA_TOKEN", "JIRA_TOKEN_FILE",
+    "BITBUCKET_ACCOUNT_EMAIL", "ALLOWED_REPOSITORIES",
 ])
 def test_legacy_connector_environment_names_are_rejected(configuration, name):
     configuration.setenv(name, "legacy")

@@ -1589,7 +1589,7 @@ function App() {
             )
               return;
             const text = await file.text();
-            await api("/v1/rules/validate?targets=false", "POST", text, true);
+            await api("/v1/rules/validate", "POST", text, true);
             const parsed = parseRule(text);
             setRule(parsed);
             setRevision(null);
@@ -1641,7 +1641,7 @@ function App() {
                 onClick={() =>
                   void task(async () => {
                     await api(
-                      "/v1/rules/validate?targets=false",
+                      "/v1/rules/validate",
                       "POST",
                       yamlText,
                       true,

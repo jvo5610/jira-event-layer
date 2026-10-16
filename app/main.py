@@ -209,7 +209,7 @@ def create_app(settings=None, store=None, authenticator=None):
                 "notice": "Observed fields, not a complete provider schema. Previews prefer non-empty values; sensitive fields are withheld and text is truncated. Objects/lists show structure only."}
 
     @app.post("/v1/rules/validate", dependencies=[Depends(authorize)], openapi_extra=YAML_BODY)
-    async def validate_yaml(request: Request, targets: bool = Query(True, deprecated=True, description="Compatibility parameter; destinations are authorized by provider credentials, not a server repository list.")):
+    async def validate_yaml(request: Request):
         try:
             text = (await request.body()).decode("utf-8")
         except UnicodeDecodeError:

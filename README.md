@@ -24,7 +24,7 @@ Jira Relay, el frontend `jira-relay-studio` y el contrato YAML `automation/v1`. 
 | Entender componentes y recorrido de un evento | [Modelo de ejecución](#modelo-de-ejecución) y [componentes](#componentes) |
 | Probar un clon sin cuentas externas | [Quick start](#quick-start) |
 | Instalar servicios separados | [Instalación sin Compose](#instalación-como-servicios-independientes-sin-compose) y [variables por servicio](#mapa-por-servicio) |
-| Conectar Jira de verdad | [Token Bearer](#api-token-de-cuenta-de-servicio-bearer) y [webhook firmado](#conectar-el-webhook-real-de-jira) |
+| Conectar Jira de verdad | [OAuth / API token](#autenticación-jira-oauth-y-api-token) y [webhook firmado](#conectar-el-webhook-real-de-jira) |
 | Crear, probar y activar una regla | [Primer flujo](#primer-flujo-asignación-y-descripción) y [guía HTTP reproducible](docs/technical-reference.md#recorrido-http-validar-evaluar-guardar-y-activar) |
 | Aprender todas las variantes YAML | [DSL y filtros](#yaml-y-filtros), [referencia de acciones](docs/technical-reference.md#acciones-entradas-y-resultados) y [catálogo comentado](examples/all-v1-variations.yaml) |
 | Usar el editor y sus sugerencias | [Guía de Studio](docs/studio.md) |
@@ -495,7 +495,7 @@ variables YAML no pueden definirlo. Las propiedades históricas de texto/id sigu
 del formato anterior: no se reescriben ni se usan como autorización. Las propiedades de Jira son
 visibles a usuarios/apps con acceso: no contienen secretos. El histórico completo permanece en Postgres.
 
-### API token de cuenta de servicio (Bearer)
+### Autenticación Jira: OAuth y API token
 
 La opción recomendada es OAuth 2.0 de cuenta de servicio: configurar `JIRA_CLIENT_ID`,
 `JIRA_CLIENT_SECRET` (o `JIRA_CLIENT_SECRET_FILE`) y `JIRA_CLOUD_ID` (UUID del sitio).
@@ -767,7 +767,8 @@ No se necesita instalar Docker CLI, AWS SDK ni kubectl dentro de los servicios.
    `uv sync --frozen --no-dev`; los comandos siguientes corren dentro del entorno instalado.
 3. Inyectar los [parámetros de cada servicio](#mapa-por-servicio), no un `.env` completo en todos.
    Usar el mismo `TENANT_ID` y DB en API y worker. Nunca montar la credencial del
-   migrador en procesos runtime. El código no carga `.env` ni consulta gestores cloud.
+   migrador en procesos runtime. Sólo se carga un dotenv si se configura `ENV_FILE`;
+   no se consulta un gestor cloud desde el motor.
 4. Con variables del **migrador**, ejecutar `python -m app.migrate --status` y
    `python -m app.migrate`. No iniciar runtime antes de completar este trabajo.
 5. Conectar `psql` como propietario y ejecutar:
@@ -863,7 +864,9 @@ en los manifests como fuente de verdad. Los despliegues particulares no deben co
 
 ## Parámetros de configuración (inventario completo)
 
-La aplicación no carga archivos `.env` por sí sola: el operador o Compose inyecta las variables.
+API, worker, migrador y mantenimiento aceptan `ENV_FILE` explícito o variables inyectadas
+por el operador. No se busca `.env` implícitamente. Studio usa su configuración independiente
+y no carga `ENV_FILE`; el operador debe inyectar sus variables o secretos `_FILE`.
 Los parámetros no secretos se configuran directamente. Los secretos marcados con **†** admiten
 el nombre directo o el mismo nombre terminado en `_FILE`: gana el directo si está definido,
 incluso si está vacío; sólo si no existe se lee el archivo UTF-8. No hay fallback a una credencial
@@ -903,7 +906,7 @@ MAX_BODY_BYTES=10485760
 JIRA_CLOUD_ID=<cloud-id-jira>
 JIRA_CLIENT_ID=<client-id-jira>
 JIRA_CLIENT_SECRET=<client-secret-jira>
-# Sólo si se utiliza Bitbucket; la API valida los repositorios de las reglas.
+# Opcional: indica credenciales declaradas aquí; la autorización remota la hace Bitbucket.
 BITBUCKET_API_TOKEN=<token-bitbucket>
 ```
 
@@ -1013,6 +1016,7 @@ y `DB_PASSWORD`/`DB_PASSWORD_FILE`, sin credenciales de proveedores.
 | Parámetro | Obligatorio / valor predeterminado | Uso |
 | --- | --- | --- |
 | `TENANT_ID` | Obligatorio; 1–100 caracteres seguros | Identidad inmutable de esta instalación en su DB. No es el Cloud ID de Jira. |
+| `ENV_FILE` | Opcional; sin búsqueda automática | Ruta de dotenv UTF-8 montado de hasta 1 MiB, cargado al iniciar; variables del proceso ganan por clave, incluso vacías. No es configuración de Studio. |
 | `DB_HOST` | Obligatorio | Host de PostgreSQL visto desde el proceso/contenedor. |
 | `DB_PORT` | `5432`; rango 1–65535 | Puerto de PostgreSQL. |
 | `DB_NAME` | Obligatorio | Base dedicada a la instalación. |
@@ -1054,6 +1058,15 @@ sin una env var nueva por token y sin RBAC individual de usuarios de GUI por aho
 | --- | --- | --- |
 | `BITBUCKET_API_TOKEN` **†** | Para ejecutar pipelines | Workspace Access Token con Pipelines Read/Write, enviado como Bearer sin email. |
 | `BITBUCKET_MAX_DAILY_WRITES` | `100`; rango 1–100000 | Presupuesto compartido de intentos de despacho por 24 h. |
+
+Los Workspace Access Tokens requieren un plan Bitbucket Premium. Verificar su disponibilidad
+antes de migrar: un API token personal anterior que usa Basic con email no se convierte en
+Workspace Access Token por enviarlo como Bearer. Esta release cambia ese contrato; no desplegar
+el conector nuevo con la credencial anterior sin validarla. Ver
+[tokens de workspace](https://support.atlassian.com/bitbucket-cloud/docs/workspace-access-tokens/).
+`BITBUCKET_ACCOUNT_EMAIL` y `ALLOWED_REPOSITORIES` se rechazan al arrancar: eliminarlos
+de la configuración anterior. No hay conversión silenciosa de Basic a Bearer ni una allowlist
+que parezca activa cuando ya no se usa; el alcance efectivo lo autoriza el token de Bitbucket.
 
 ### GUI (proceso opcional)
 
