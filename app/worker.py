@@ -29,8 +29,6 @@ class Bitbucket:
         if not self.settings.bitbucket_token or not self.settings.bitbucket_email:
             raise RuleError("connector_credentials_missing")
         target = f"{action.workspace}/{action.repository}"
-        if target not in self.settings.allowed_repositories:
-            raise RuleError("connector_target_not_allowed")
         url = f"https://api.bitbucket.org/2.0/repositories/{target}/pipelines/"
         if external_uuid:
             url += quote(external_uuid, safe="")
@@ -134,7 +132,6 @@ class Worker:
 
     def tick_jira(self, run, rule, action, payload):
         try:
-            self.settings.check_targets(rule)
             context = self.execution_context(run, payload)
             revision = self.store.query("SELECT sha256 FROM rule_versions WHERE rule_name=%s AND version=%s",
                                         (run["rule_name"], run["version"]))[0]
@@ -186,7 +183,6 @@ class Worker:
             self.finish(run, "needs_review", error="poll_budget_exhausted", external_uuid=run["external_uuid"])
             return True
         try:
-            self.settings.check_targets(rule)
             payload = None if polling else render_action(action, self.execution_context(run, rows[0]["payload"]))
             if not polling:
                 self.reserve_bitbucket_write(run)

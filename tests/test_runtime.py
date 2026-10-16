@@ -26,7 +26,7 @@ def configuration(monkeypatch):
              "BITBUCKET_ACCOUNT_EMAIL", "JIRA_ACCOUNT_EMAIL", "BITBUCKET_EMAIL", "BITBUCKET_TOKEN",
              "JIRA_EMAIL", "JIRA_TOKEN",
              "API_TOKEN", "ADMIN_TOKEN", "READER_TOKEN", "WRITER_TOKEN", "OPERATOR_TOKEN", "TENANT_ID", "AUTH_ROTATION_TTL_SECONDS",
-             "ALLOWED_REPOSITORIES", "MAX_BODY_BYTES",
+             "MAX_BODY_BYTES",
              "JIRA_MAX_DAILY_WRITES", "BITBUCKET_MAX_DAILY_WRITES"}
     for name in names:
         monkeypatch.delenv(name, raising=False)
@@ -44,7 +44,6 @@ def configuration(monkeypatch):
 def test_portable_default_configuration(configuration):
     cfg = Settings.from_env()
     assert cfg.tenant == "independent-installation"
-    assert cfg.allowed_repositories == ()
     assert cfg.max_body == 10485760
     assert "example-workspace" not in repr(cfg)
     assert "a" * 40 not in repr(cfg) and "db-test-password" not in repr(cfg)

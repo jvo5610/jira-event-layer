@@ -4,7 +4,7 @@
   "runtime_release": "1.0.0; production-equivalent acceptance is required for each deployed revision",
   "implemented_hardening": [
     "Portable image and hardened Compose with optional mounted secrets; no cloud dependency in runtime",
-    "Bitbucket repository allowlist, Jira account permissions and mandatory positive write scope; immutable installation tenant",
+    "Bitbucket and Jira provider permissions and mandatory positive write scope; immutable installation tenant",
     "Transactional checksummed migrations; no startup DDL and fail-closed schema compatibility",
     "Database-backed expiring API tokens, explicit permissions, one-time bootstrap and one-hour rotation confirmation window",
     "Single API for management and signed webhooks; independent Bearer/HMAC authorization and operator-managed WAF exposure",

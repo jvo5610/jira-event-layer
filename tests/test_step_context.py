@@ -93,7 +93,7 @@ def test_pipeline_dispatch_uses_the_same_trusted_context_without_infrastructure(
         return httpx.Response(201, json={'uuid': '{pipeline-context}'})
     worker = Worker.__new__(Worker)
     worker.store = Store()
-    worker.settings = SimpleNamespace(check_targets=lambda rule: None)
+    worker.settings = SimpleNamespace()
     worker.claim = lambda: {'id': 'run-1', 'event_id': 'event-1', 'rule_name': 'step-context-unit', 'version': 1, 'step': 1, 'status': 'pending', 'attempts': 1}
     worker.connector = SimpleNamespace(call=dispatch)
     worker.reserve_bitbucket_write = lambda run: None

@@ -1,7 +1,9 @@
 import os
 import re
+from io import StringIO
 from dataclasses import dataclass, field
 from pathlib import Path
+from dotenv.parser import parse_stream
 from psycopg.conninfo import conninfo_to_dict
 
 
@@ -13,6 +15,37 @@ LEGACY_CONNECTOR_ENV = (
     "BITBUCKET_TOKEN",
     "BITBUCKET_TOKEN_FILE",
 )
+
+
+def load_environment():
+    """Load only an explicitly selected ENV_FILE; process variables win per key."""
+    filename = os.getenv("ENV_FILE")
+    if filename is None:
+        return
+    try:
+        if not filename.strip():
+            raise ValueError()
+        with Path(filename).open("rb") as handle:
+            raw = handle.read(1048577)
+        if len(raw) > 1048576:
+            raise ValueError()
+        values = {}
+        # Parse bindings without interpolation; reject malformed lines atomically.
+        for binding in parse_stream(StringIO(raw.decode("utf-8-sig"))):
+            if binding.error:
+                raise ValueError()
+            if binding.key is None:
+                continue  # Blank line or comment.
+            if (not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", binding.key)
+                    or binding.value is None or "\x00" in binding.value):
+                raise ValueError()
+            values[binding.key] = binding.value
+    except (OSError, UnicodeError, ValueError):
+        raise RuntimeError("Unable to load ENV_FILE as a bounded UTF-8 dotenv file") from None
+    for key, value in values.items():
+        # Never chain another file through the file's own contents.
+        if key != "ENV_FILE":
+            os.environ.setdefault(key, value)
 
 
 def reject_legacy_connector_env():
@@ -53,6 +86,7 @@ def integer(name, default, minimum, maximum):
 
 def database_config(prefix=""):
     """Explicit database parameters; URL-based deployment configuration is not supported."""
+    load_environment()
     if any(prefix + name in os.environ for name in ("DATABASE_URL", "DATABASE_URL_FILE")):
         raise RuntimeError("DATABASE_URL and DATABASE_URL_FILE are not supported; use DB_HOST, DB_PORT, DB_NAME, DB_USER and DB_PASSWORD or DB_PASSWORD_FILE")
     values = {}
@@ -73,10 +107,6 @@ def database_options(database):
     return conninfo_to_dict(database) if isinstance(database, str) else dict(database)
 
 
-def csv(name):
-    return tuple(filter(None, (v.strip() for v in os.getenv(name, "").split(","))))
-
-
 def tenant_id():
     value = os.getenv("TENANT_ID", "")
     if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}", value):
@@ -91,7 +121,6 @@ class Settings:
     webhook_secret: str = field(repr=False)
     bitbucket_email: str = ""
     bitbucket_token: str = field(default="", repr=False)
-    allowed_repositories: tuple[str, ...] = ()
     tenant: str = "default"
     max_body: int = 10485760
     jira_token: str = field(default="", repr=False)
@@ -102,6 +131,7 @@ class Settings:
 
     @classmethod
     def from_env(cls, mode="api"):
+        load_environment()
         reject_legacy_connector_env()
         obsolete = [name for base in ("API_TOKEN", "ADMIN_TOKEN", "READER_TOKEN", "WRITER_TOKEN", "OPERATOR_TOKEN")
                     for name in (base, base + "_FILE") if name in os.environ]
@@ -112,7 +142,7 @@ class Settings:
         settings = cls(database_config(),
                        None,  # Read the bootstrap secret only if the database has never been initialized.
                        secret("JIRA_WEBHOOK_SECRET", required=mode == "api"),
-                       os.getenv("BITBUCKET_ACCOUNT_EMAIL", ""), secret("BITBUCKET_API_TOKEN"), csv("ALLOWED_REPOSITORIES"),
+                       os.getenv("BITBUCKET_ACCOUNT_EMAIL", ""), secret("BITBUCKET_API_TOKEN"),
                        tenant=tenant_id())
         if settings.webhook_secret and (len(settings.webhook_secret) < 32 or not settings.webhook_secret.isascii()):
             raise RuntimeError("Webhook secret must contain at least 32 ASCII characters")
@@ -123,9 +153,3 @@ class Settings:
         settings.jira_max_daily_writes = integer("JIRA_MAX_DAILY_WRITES", 100, 1, 100000)
         settings.bitbucket_max_daily_writes = integer("BITBUCKET_MAX_DAILY_WRITES", 100, 1, 100000)
         return settings
-
-    def check_targets(self, rule):
-        for action in rule.actions:
-            if action.type == "bitbucket.pipeline":
-                if f"{action.workspace}/{action.repository}" not in self.allowed_repositories:
-                    raise ValueError("Action target is not in connector allowlist")

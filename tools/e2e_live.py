@@ -101,7 +101,6 @@ def run(args):
         repo = args.bitbucket_repository
         if repo.count("/") != 1:
             raise RuntimeError("--bitbucket-repository must be workspace/repository")
-        config["ALLOWED_REPOSITORIES"] = repo
         pipeline = args.bitbucket_pipeline
         branch = args.bitbucket_branch
     if args.provider in {"jira", "all"}:

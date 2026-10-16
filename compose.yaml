@@ -27,7 +27,6 @@ x-database: &database
 x-environment: &environment
   <<: *database
   TENANT_ID: ${TENANT_ID:?Set a stable TENANT_ID for this installation}
-  ALLOWED_REPOSITORIES: ${ALLOWED_REPOSITORIES:-}
   BITBUCKET_ACCOUNT_EMAIL: ${BITBUCKET_ACCOUNT_EMAIL:-}
   BITBUCKET_API_TOKEN_FILE: /run/secrets/bitbucket_api_token
   JIRA_API_TOKEN_FILE: /run/secrets/jira_api_token

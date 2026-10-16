@@ -167,9 +167,9 @@ snapshot del webhook. Es lectura + escritura, **no operación atómica ante edic
 
 El worker usa `BITBUCKET_ACCOUNT_EMAIL` + `BITBUCKET_API_TOKEN`/`_FILE` mediante HTTP Basic,
 contra `https://api.bitbucket.org/2.0/repositories/{workspace}/{repository}/pipelines/`.
-Configurar `ALLOWED_REPOSITORIES=workspace/repo` tanto en la API que valida reglas como en los
-workers que las ejecutan; varios destinos se separan por comas. Vacío deniega todo. El token
-debe permitir lanzar y consultar pipelines en esos repositorios. Validar permisos efectivos
+Cada regla define el workspace y repositorio destino. El servicio no restringe esos
+destinos con una lista adicional; el token debe permitir lanzar y consultar pipelines
+en los repositorios seleccionados. Validar permisos efectivos
 con la prueba opt-in; no deducirlos de que el login general funciona.
 
 El repositorio debe tener la rama y un pipeline `custom` del nombre seleccionado en
