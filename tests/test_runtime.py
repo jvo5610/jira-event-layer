@@ -23,6 +23,7 @@ from test_integration import activate, env, webhook_client, ingest, YAML, EVENT
 def configuration(monkeypatch):
     # Isolate all environment inputs, never consume developer/provider credentials.
     names = {"DATABASE_URL", "DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD", "ADMIN_BOOTSTRAP_TOKEN", "JIRA_WEBHOOK_SECRET", "BITBUCKET_API_TOKEN", "JIRA_API_TOKEN",
+             "JIRA_CLIENT_ID", "JIRA_CLIENT_SECRET", "JIRA_CLOUD_ID", "ENV_FILE",
              "BITBUCKET_ACCOUNT_EMAIL", "JIRA_ACCOUNT_EMAIL", "BITBUCKET_EMAIL", "BITBUCKET_TOKEN",
              "JIRA_EMAIL", "JIRA_TOKEN",
              "API_TOKEN", "ADMIN_TOKEN", "READER_TOKEN", "WRITER_TOKEN", "OPERATOR_TOKEN", "TENANT_ID", "AUTH_ROTATION_TTL_SECONDS",
@@ -93,11 +94,9 @@ def test_compose_keeps_migrator_credentials_out_of_runtime():
 
 
 def test_v1_connector_environment_names(configuration):
-    configuration.setenv("BITBUCKET_ACCOUNT_EMAIL", "bitbucket@example.com")
     configuration.setenv("BITBUCKET_API_TOKEN", "bitbucket-secret")
     configuration.setenv("JIRA_API_TOKEN", "jira-secret")
     cfg = Settings.from_env()
-    assert cfg.bitbucket_email == "bitbucket@example.com"
     assert cfg.bitbucket_token == "bitbucket-secret"
     assert cfg.jira_token == "jira-secret"
 

@@ -13,7 +13,7 @@ from psycopg import OperationalError
 from psycopg_pool import PoolTimeout
 from starlette.concurrency import run_in_threadpool
 
-from app.config import Settings, secret
+from app.config import Settings, secret, jira_configured
 from app.auth import required_permission
 from app.tokens import TokenManager, DatabaseAuthenticator
 from app.catalog import SAMPLE_LIMIT, VISITS_PER_EVENT, discover
@@ -194,8 +194,8 @@ def create_app(settings=None, store=None, authenticator=None):
             "events": request.app.state.store.query("SELECT DISTINCT source,event_type FROM (SELECT source,event_type FROM events ORDER BY received_at DESC LIMIT 200) recent ORDER BY source,event_type"),
             "connectors": {
                 # Absence here says nothing about credentials held only by workers.
-                "jira": {"configured": True if cfg.jira_token and cfg.jira_cloud_id else None},
-                "bitbucket": {"configured": True if cfg.bitbucket_token and cfg.bitbucket_email else None},
+                "jira": {"configured": True if jira_configured(cfg) and cfg.jira_cloud_id else None},
+                "bitbucket": {"configured": True if cfg.bitbucket_token else None},
             },
             "limits": {"actions": 10, "filter_depth": 12, "filter_nodes": 128, "filter_children": 32},
         }

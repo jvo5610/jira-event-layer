@@ -14,7 +14,7 @@ def initialize(directory, runtime_password, migration_password):
     # the nonroot container read only the secrets explicitly granted in Compose.
     directory.mkdir(mode=0o700, parents=False, exist_ok=False)
     values = {"db_runtime_password": runtime_password, "db_migrator_password": migration_password,
-              "bitbucket_api_token": "", "jira_api_token": "", "gui_api_token": "",
+              "bitbucket_api_token": "", "jira_api_token": "", "jira_client_secret": "", "gui_api_token": "",
               "admin_bootstrap_token": secrets.token_urlsafe(48), "jira_webhook_secret": secrets.token_urlsafe(48)}
     for name, value in values.items():
         path = directory / name

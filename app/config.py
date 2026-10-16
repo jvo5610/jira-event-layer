@@ -3,6 +3,7 @@ import re
 from io import StringIO
 from dataclasses import dataclass, field
 from pathlib import Path
+from uuid import UUID
 from dotenv.parser import parse_stream
 from psycopg.conninfo import conninfo_to_dict
 
@@ -114,17 +115,23 @@ def tenant_id():
     return value
 
 
+def jira_configured(settings):
+    return bool(getattr(settings, "jira_token", "") or
+                (getattr(settings, "jira_client_id", "") and getattr(settings, "jira_client_secret", "")))
+
+
 @dataclass
 class Settings:
     database: dict = field(repr=False)
     admin_bootstrap_token: str | None = field(repr=False)
     webhook_secret: str = field(repr=False)
-    bitbucket_email: str = ""
     bitbucket_token: str = field(default="", repr=False)
     tenant: str = "default"
     max_body: int = 10485760
     jira_token: str = field(default="", repr=False)
     jira_cloud_id: str = ""
+    jira_client_id: str = field(default="", repr=False)
+    jira_client_secret: str = field(default="", repr=False)
     jira_max_daily_writes: int = 100
     bitbucket_max_daily_writes: int = 100
     auth_rotation_ttl: int = 3600
@@ -142,7 +149,7 @@ class Settings:
         settings = cls(database_config(),
                        None,  # Read the bootstrap secret only if the database has never been initialized.
                        secret("JIRA_WEBHOOK_SECRET", required=mode == "api"),
-                       os.getenv("BITBUCKET_ACCOUNT_EMAIL", ""), secret("BITBUCKET_API_TOKEN"),
+                       bitbucket_token=secret("BITBUCKET_API_TOKEN"),
                        tenant=tenant_id())
         if settings.webhook_secret and (len(settings.webhook_secret) < 32 or not settings.webhook_secret.isascii()):
             raise RuntimeError("Webhook secret must contain at least 32 ASCII characters")
@@ -150,6 +157,17 @@ class Settings:
         settings.max_body = integer("MAX_BODY_BYTES", 10485760, 1024, 10485760)
         settings.jira_token = secret("JIRA_API_TOKEN")
         settings.jira_cloud_id = os.getenv("JIRA_CLOUD_ID", "")
+        settings.jira_client_id = secret("JIRA_CLIENT_ID")
+        settings.jira_client_secret = secret("JIRA_CLIENT_SECRET")
+        if bool(settings.jira_client_id) != bool(settings.jira_client_secret):
+            raise RuntimeError("JIRA_CLIENT_ID and JIRA_CLIENT_SECRET must be configured together")
+        if settings.jira_client_id:
+            if settings.jira_token:
+                raise RuntimeError("Choose Jira OAuth credentials or JIRA_API_TOKEN, not both")
+            try:
+                settings.jira_cloud_id = str(UUID(settings.jira_cloud_id))
+            except ValueError:
+                raise RuntimeError("JIRA_CLOUD_ID must be a valid UUID when Jira OAuth is configured") from None
         settings.jira_max_daily_writes = integer("JIRA_MAX_DAILY_WRITES", 100, 1, 100000)
         settings.bitbucket_max_daily_writes = integer("BITBUCKET_MAX_DAILY_WRITES", 100, 1, 100000)
         return settings

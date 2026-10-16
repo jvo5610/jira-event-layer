@@ -152,10 +152,11 @@ uv run python tools/e2e_live.py --provider jira --output work/e2e-jira \
 ```
 
 Las únicas variables de entorno del proveedor son las conexiones normales:
-BITBUCKET_ACCOUNT_EMAIL/BITBUCKET_API_TOKEN y
-JIRA_API_TOKEN/JIRA_CLOUD_ID. Jira utiliza Bearer con un API token de cuenta de servicio compatible; no requiere email.
+BITBUCKET_API_TOKEN (Workspace Access Token, sin email) y
+JIRA_CLIENT_ID/JIRA_CLIENT_SECRET/JIRA_CLOUD_ID (OAuth de cuenta de servicio).
+Como alternativa compatible, Jira admite JIRA_API_TOKEN/JIRA_CLOUD_ID sin OAuth; no combinar ambos modos.
 La versión 1 no acepta los nombres anteriores; los tokens también admiten
-BITBUCKET_API_TOKEN_FILE y JIRA_API_TOKEN_FILE.
+BITBUCKET_API_TOKEN_FILE, JIRA_CLIENT_SECRET_FILE y JIRA_API_TOKEN_FILE.
 Los destinos se pasan explícitamente como argumentos; no se leen variables E2E_* ni TEST_*.
 La autorización para escribir también es un argumento obligatorio para ejecutar, no una variable persistente.
 No pegar tokens en comandos ni en YAML: cargarlos mediante el gestor de secretos del operador.
@@ -477,7 +478,8 @@ el catálogo acotado del evento de esa misma ejecución. No ejecuta acciones ni 
 Sin resultados devuelve `sample:false`, no valores ficticios. El editor descarta muestras
 si cambian el trigger, el filtro o los pasos anteriores; indica siempre versión y ejecución.
 
-El conector requiere JIRA_API_TOKEN y JIRA_CLOUD_ID.
+El conector requiere JIRA_CLIENT_ID, JIRA_CLIENT_SECRET y JIRA_CLOUD_ID para OAuth,
+o JIRA_API_TOKEN y JIRA_CLOUD_ID como alternativa estática; no combinar ambos modos.
 Usa exclusivamente https://api.atlassian.com/ex/jira/{cloudId}/rest/api/3.
 No se exige ni agrega una etiqueta de alcance a los tickets. El proyecto real de cada tarjeta se verifica antes de actuar.
 Los proyectos/campos se especifican en el YAML y Jira aplica los permisos de la cuenta.
@@ -494,6 +496,28 @@ del formato anterior: no se reescriben ni se usan como autorización. Las propie
 visibles a usuarios/apps con acceso: no contienen secretos. El histórico completo permanece en Postgres.
 
 ### API token de cuenta de servicio (Bearer)
+
+La opción recomendada es OAuth 2.0 de cuenta de servicio: configurar `JIRA_CLIENT_ID`,
+`JIRA_CLIENT_SECRET` (o `JIRA_CLIENT_SECRET_FILE`) y `JIRA_CLOUD_ID` (UUID del sitio).
+Crear una credencial **OAuth 2.0** en **Directory → Service accounts → Create credentials**,
+con los permisos de la cuenta y scopes indicados abajo. No es una aplicación OAuth 3LO:
+no necesita email, callback ni refresh token.
+
+El worker obtiene el token con `client_credentials` en
+`https://auth.atlassian.com/oauth/token`, lo conserva sólo en memoria y lo renueva antes
+del vencimiento. La identidad de servicio permanece estable entre renovaciones. Una lectura
+con `401` puede refrescar y reintentarse una vez; las escrituras no se reenvían automáticamente.
+No configurar `JIRA_API_TOKEN` junto con OAuth. `JIRA_WEBHOOK_SECRET` sigue siendo independiente.
+
+```dotenv
+JIRA_CLIENT_ID=<client-id-de-la-cuenta-de-servicio>
+JIRA_CLIENT_SECRET_FILE=/run/secrets/jira_client_secret
+JIRA_CLOUD_ID=<cloud-id-del-sitio-jira>
+```
+
+Referencia: [OAuth de cuentas de servicio (Atlassian)](https://support.atlassian.com/user-management/docs/create-oauth-2-0-credential-for-service-accounts/).
+
+#### Alternativa compatible: API token estático
 
 Jira Relay envía un API token de cuenta de servicio como `Authorization: Bearer <token>`.
 Bearer es la forma de enviar el API token, no otra credencial ni un flujo OAuth.
@@ -793,7 +817,7 @@ Para Compose con PostgreSQL administrado por el operador:
    contraseñas sin mostrarlas y genera los archivos `db_runtime_password` y `db_migrator_password`.
    Se niega a sobrescribir un directorio existente. Genera un único archivo `admin_bootstrap_token`;
    los tokens de conectores opcionales empiezan vacíos.
-4. Configurar cloud ID e identidad de servicio (email sólo para Bitbucket). Cargar credenciales de conectores en los
+4. Configurar cloud ID y credenciales OAuth de servicio Jira, y Workspace Access Token Bitbucket sin email. Cargar credenciales de conectores en los
    archivos privados, nunca en YAML de reglas. Los secretos se resuelven primero desde NAME;
    sólo si no está definida se lee el archivo indicado por NAME_FILE. Si ambas existen gana NAME,
    sin abrir el archivo. Un valor directo vacío no activa el fallback y los secretos obligatorios fallan.
@@ -877,9 +901,9 @@ AUTH_ROTATION_TTL_SECONDS=3600
 MAX_BODY_BYTES=10485760
 # Opcionales: permiten mostrar el estado del conector en el catálogo.
 JIRA_CLOUD_ID=<cloud-id-jira>
-JIRA_API_TOKEN=<token-jira>
+JIRA_CLIENT_ID=<client-id-jira>
+JIRA_CLIENT_SECRET=<client-secret-jira>
 # Sólo si se utiliza Bitbucket; la API valida los repositorios de las reglas.
-BITBUCKET_ACCOUNT_EMAIL=<email-bitbucket>
 BITBUCKET_API_TOKEN=<token-bitbucket>
 ```
 
@@ -904,10 +928,10 @@ DB_NAME=jira_relay
 DB_USER=jira_relay_runtime
 DB_PASSWORD=<secreto-runtime>
 JIRA_CLOUD_ID=<cloud-id-jira>
-JIRA_API_TOKEN=<token-jira>
+JIRA_CLIENT_ID=<client-id-jira>
+JIRA_CLIENT_SECRET=<client-secret-jira>
 JIRA_MAX_DAILY_WRITES=100
 # Sólo si se utiliza Bitbucket.
-BITBUCKET_ACCOUNT_EMAIL=<email-bitbucket>
 BITBUCKET_API_TOKEN=<token-bitbucket>
 BITBUCKET_MAX_DAILY_WRITES=100
 # Omitir para usar el hostname; si se configura, debe ser único por worker.
@@ -916,8 +940,9 @@ BITBUCKET_MAX_DAILY_WRITES=100
 
 No necesita bootstrap, secreto de webhook ni configuración Studio. No expone un servidor HTTP.
 No necesita `MAX_BODY_BYTES` ni `AUTH_ROTATION_TTL_SECONDS`.
-Para deshabilitar Jira, omitir su token. Para despachar pipelines Bitbucket, el worker
-necesita email y token con permisos sobre el repositorio definido en la regla.
+Para deshabilitar Jira, omitir sus credenciales. Para despachar pipelines Bitbucket, el worker
+necesita un Workspace Access Token con Pipelines Read/Write sobre el repositorio de la regla.
+Se envía como Bearer sin email; no requiere permisos de webhook para lanzar o consultar runs.
 
 #### `migrate`: trabajo de migración previo al arranque
 
@@ -965,8 +990,8 @@ respuesta; no hay un `MAX_BODY_BYTES` propio de Studio.
 
 | Servicio | Archivos montados en `/run/secrets/` |
 | --- | --- |
-| `api` | `db_runtime_password`, `admin_bootstrap_token`, `jira_webhook_secret`, `jira_api_token`, `bitbucket_api_token` |
-| `worker` | `db_runtime_password`, `jira_api_token`, `bitbucket_api_token` |
+| `api` | `db_runtime_password`, `admin_bootstrap_token`, `jira_webhook_secret`, `jira_client_secret`, `jira_api_token`, `bitbucket_api_token` |
+| `worker` | `db_runtime_password`, `jira_client_secret`, `jira_api_token`, `bitbucket_api_token` |
 | `migrate` | `db_migrator_password` |
 | `studio` | `gui_api_token`, `studio_login_password` |
 
@@ -1017,7 +1042,9 @@ sin una env var nueva por token y sin RBAC individual de usuarios de GUI por aho
 
 | Parámetro | Obligatorio / valor predeterminado | Uso |
 | --- | --- | --- |
-| `JIRA_API_TOKEN` **†** | Para ejecutar acciones Jira | API token de cuenta de servicio enviado como Bearer; sin email. |
+| `JIRA_CLIENT_ID` | Para Jira mediante OAuth | Client ID de cuenta de servicio, flujo `client_credentials`. |
+| `JIRA_CLIENT_SECRET` **†** | Junto con `JIRA_CLIENT_ID` | Client secret; token temporal obtenido y renovado sólo en memoria. |
+| `JIRA_API_TOKEN` **†** | Alternativa sin OAuth | API token estático Bearer; no combinar con las credenciales OAuth. |
 | `JIRA_CLOUD_ID` | Para ejecutar acciones Jira | UUID del sitio Jira Cloud. |
 | `JIRA_MAX_DAILY_WRITES` | `100`; rango 1–100000 | Intentos de escritura por ventana móvil de 24 h, compartidos en DB. |
 
@@ -1025,8 +1052,7 @@ sin una env var nueva por token y sin RBAC individual de usuarios de GUI por aho
 
 | Parámetro | Obligatorio / valor predeterminado | Uso |
 | --- | --- | --- |
-| `BITBUCKET_ACCOUNT_EMAIL` | Para ejecutar pipelines | Cuenta asociada al API token de Bitbucket. |
-| `BITBUCKET_API_TOKEN` **†** | Para ejecutar pipelines | Credencial del proveedor; Bitbucket conserva su autenticación actual. |
+| `BITBUCKET_API_TOKEN` **†** | Para ejecutar pipelines | Workspace Access Token con Pipelines Read/Write, enviado como Bearer sin email. |
 | `BITBUCKET_MAX_DAILY_WRITES` | `100`; rango 1–100000 | Presupuesto compartido de intentos de despacho por 24 h. |
 
 ### GUI (proceso opcional)

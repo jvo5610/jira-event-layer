@@ -16,9 +16,6 @@ def test_catalog_does_not_claim_worker_jira_credentials_are_missing(env):
     settings.bitbucket_token = ""
     assert client.get('/v1/catalog').json()['connectors']['bitbucket']['configured'] is None
     settings.bitbucket_token = "bitbucket-test-token"
-    settings.bitbucket_email = ""
-    assert client.get('/v1/catalog').json()['connectors']['bitbucket']['configured'] is None
-    settings.bitbucket_email = "service@example.com"
     assert client.get('/v1/catalog').json()['connectors']['bitbucket'] == {'configured': True}
 
 

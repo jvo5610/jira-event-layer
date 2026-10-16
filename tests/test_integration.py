@@ -32,7 +32,7 @@ def _test_database_config():
 @pytest.fixture
 def env():
     database = _test_database_config()
-    settings = Settings(database, "a"*40, "b"*40, "lab@example.com", "fake-test-token",
+    settings = Settings(database, "a"*40, "b"*40, bitbucket_token="fake-test-token",
                         tenant="test-installation")
     migrate(database, settings.tenant)
     store = Store(database)

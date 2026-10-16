@@ -165,7 +165,7 @@ snapshot del webhook. Es lectura + escritura, **no operación atómica ante edic
 
 ### Conectar Bitbucket
 
-El worker usa `BITBUCKET_ACCOUNT_EMAIL` + `BITBUCKET_API_TOKEN`/`_FILE` mediante HTTP Basic,
+El worker usa `BITBUCKET_API_TOKEN`/`_FILE` como Workspace Access Token mediante Bearer, sin email,
 contra `https://api.bitbucket.org/2.0/repositories/{workspace}/{repository}/pipelines/`.
 Cada regla define el workspace y repositorio destino. El servicio no restringe esos
 destinos con una lista adicional; el token debe permitir lanzar y consultar pipelines
