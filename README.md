@@ -152,7 +152,7 @@ uv run python tools/e2e_live.py --provider jira --output work/e2e-jira \
 ```
 
 Las únicas variables de entorno del proveedor son las conexiones normales:
-BITBUCKET_API_TOKEN (Workspace Access Token, sin email) y
+BITBUCKET_API_TOKEN (Access Token de repositorio o workspace, sin email) y
 JIRA_CLIENT_ID/JIRA_CLIENT_SECRET/JIRA_CLOUD_ID (OAuth de cuenta de servicio).
 Como alternativa compatible, Jira admite JIRA_API_TOKEN/JIRA_CLOUD_ID sin OAuth; no combinar ambos modos.
 La versión 1 no acepta los nombres anteriores; los tokens también admiten
@@ -818,7 +818,7 @@ Para Compose con PostgreSQL administrado por el operador:
    contraseñas sin mostrarlas y genera los archivos `db_runtime_password` y `db_migrator_password`.
    Se niega a sobrescribir un directorio existente. Genera un único archivo `admin_bootstrap_token`;
    los tokens de conectores opcionales empiezan vacíos.
-4. Configurar cloud ID y credenciales OAuth de servicio Jira, y Workspace Access Token Bitbucket sin email. Cargar credenciales de conectores en los
+4. Configurar cloud ID y credenciales OAuth de servicio Jira, y Access Token Bitbucket sin email. Cargar credenciales de conectores en los
    archivos privados, nunca en YAML de reglas. Los secretos se resuelven primero desde NAME;
    sólo si no está definida se lee el archivo indicado por NAME_FILE. Si ambas existen gana NAME,
    sin abrir el archivo. Un valor directo vacío no activa el fallback y los secretos obligatorios fallan.
@@ -944,7 +944,7 @@ BITBUCKET_MAX_DAILY_WRITES=100
 No necesita bootstrap, secreto de webhook ni configuración Studio. No expone un servidor HTTP.
 No necesita `MAX_BODY_BYTES` ni `AUTH_ROTATION_TTL_SECONDS`.
 Para deshabilitar Jira, omitir sus credenciales. Para despachar pipelines Bitbucket, el worker
-necesita un Workspace Access Token con Pipelines Read/Write sobre el repositorio de la regla.
+necesita un Access Token con Pipelines Read/Write sobre el repositorio de la regla.
 Se envía como Bearer sin email; no requiere permisos de webhook para lanzar o consultar runs.
 
 #### `migrate`: trabajo de migración previo al arranque
@@ -1056,7 +1056,7 @@ sin una env var nueva por token y sin RBAC individual de usuarios de GUI por aho
 
 | Parámetro | Obligatorio / valor predeterminado | Uso |
 | --- | --- | --- |
-| `BITBUCKET_API_TOKEN` **†** | Para ejecutar pipelines | Workspace Access Token con Pipelines Read/Write, enviado como Bearer sin email. |
+| `BITBUCKET_API_TOKEN` **†** | Para ejecutar pipelines | Access Token de repositorio, proyecto o workspace con Pipelines Read/Write, enviado como Bearer sin email. |
 | `BITBUCKET_MAX_DAILY_WRITES` | `100`; rango 1–100000 | Presupuesto compartido de intentos de despacho por 24 h. |
 
 Los Workspace Access Tokens requieren un plan Bitbucket Premium. Verificar su disponibilidad
@@ -1064,6 +1064,12 @@ antes de migrar: un API token personal anterior que usa Basic con email no se co
 Workspace Access Token por enviarlo como Bearer. Esta release cambia ese contrato; no desplegar
 el conector nuevo con la credencial anterior sin validarla. Ver
 [tokens de workspace](https://support.atlassian.com/bitbucket-cloud/docs/workspace-access-tokens/).
+Para una instalación que opera un único repositorio, se puede usar un Repository Access Token:
+el conector usa el mismo Bearer y Bitbucket limita su alcance a ese repo. No requiere Premium
+ni permisos de escritura sobre código, webhooks o variables: conceder sólo Pipelines Read/Write.
+No habilita otros repositorios por agregarlos al YAML. Si se necesita operar varios repositorios,
+evaluar el token de proyecto/workspace y su plan, sin ampliar el alcance silenciosamente.
+Ver [tipos y alcance de Access Tokens](https://support.atlassian.com/bitbucket-cloud/docs/access-tokens/).
 `BITBUCKET_ACCOUNT_EMAIL` y `ALLOWED_REPOSITORIES` se rechazan al arrancar: eliminarlos
 de la configuración anterior. No hay conversión silenciosa de Basic a Bearer ni una allowlist
 que parezca activa cuando ya no se usa; el alcance efectivo lo autoriza el token de Bitbucket.
