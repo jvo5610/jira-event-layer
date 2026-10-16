@@ -681,6 +681,8 @@ export const messages: Record<string, [string, string]> = {
   failed: ["Falló", "Failed"],
   needs_review: ["Requiere revisión", "Needs review"],
   processed: ["Procesado", "Processed"],
+  ignored: ["Ignorado", "Ignored"],
+  held: ["Retenido", "Held"],
   configured: ["Configurado", "Configured"],
   not_configured: ["Sin configurar", "Not configured"],
   unknown: ["No verificado", "Not verified"],

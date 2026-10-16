@@ -53,6 +53,7 @@ import {
   actionLabels,
   api,
   eventExclusionMessage,
+  eventStatus,
   hasStepReference,
   initialAction,
   newRule,
@@ -1467,13 +1468,7 @@ function App() {
                                 <td>{whenDate(row.received_at)}</td>
                                 <td>
                                   <Status
-                                    value={
-                                      row.last_error
-                                        ? "failed"
-                                        : row.processed_at
-                                          ? "processed"
-                                          : "pending"
-                                    }
+                                    value={eventStatus(row)}
                                   />
                                 </td>
                                 <td>

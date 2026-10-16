@@ -2,6 +2,13 @@ import { dump, load } from "js-yaml";
 import { t } from "./i18n";
 
 export type Obj = Record<string, any>;
+export function eventStatus(event: Obj): string {
+  const reason = event.execution_blocked_reason ?? event.last_error;
+  if (["ignored_service_actor", "ignored_jira_actor"].includes(reason)) return "ignored";
+  if (reason === "held_actor_unknown") return "held";
+  if (event.last_error) return "failed";
+  return event.processed_at ? "processed" : "pending";
+}
 export function eventExclusionMessage(event: Obj): string | null {
   const reason = event.execution_blocked_reason ?? event.last_error;
   if (["ignored_service_actor", "ignored_jira_actor"].includes(reason))

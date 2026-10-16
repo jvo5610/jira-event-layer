@@ -1278,6 +1278,7 @@ details > .field {
   color: #bf7b86;
 }
 .status.pending,
+.status.held,
 .status.waiting,
 .status.dispatching {
   background: #fff5df;

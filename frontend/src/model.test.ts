@@ -4,6 +4,7 @@ import {
   actionDefinitions,
   api,
   eventExclusionMessage,
+  eventStatus,
   bindingMode,
   bindingValue,
   initialAction,
@@ -39,6 +40,15 @@ describe("Full v1 editor contract", () => {
     expect(eventExclusionMessage({execution_blocked_reason: "ignored_service_actor"})).toContain("cuenta del servicio");
     expect(eventExclusionMessage({last_error: "held_actor_unknown"})).toContain("Retenido");
     expect(eventExclusionMessage({last_error: "ordinary-error"})).toBeNull();
+  });
+  it("does not label anti-loop exclusions as processing failures", () => {
+    for (const reason of ["ignored_service_actor", "ignored_jira_actor"])
+      expect(eventStatus({last_error: reason, processed_at: "2026-10-16T20:07:00Z"})).toBe("ignored");
+    expect(eventStatus({last_error: "held_actor_unknown"})).toBe("held");
+    expect(eventStatus({execution_blocked_reason: "ignored_service_actor"})).toBe("ignored");
+    expect(eventStatus({last_error: "unexpected_failure"})).toBe("failed");
+    expect(eventStatus({processed_at: "2026-10-16T20:07:00Z"})).toBe("processed");
+    expect(eventStatus({})).toBe("pending");
   });
   it("explains unsafe activation errors without exposing the raw rule", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({detail: "unsafe_write_scope: raw details"}), {status: 422})));

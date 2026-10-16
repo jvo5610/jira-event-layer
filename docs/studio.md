@@ -125,6 +125,9 @@ El gateway valida Host/Origin, bloquea peticiones cross-site, limita el cuerpo d
 
 ## Capacidades y rendimiento
 
+- El historial distingue eventos `Ignorado` (cuenta de servicio excluida para evitar bucles),
+  `Retenido` (actor desconocido), `Falló` (error de procesamiento), `Procesado` y `Pendiente`.
+  Ignorar un evento propio no es un fallo; el detalle explica el bloqueo de ejecución.
 - Ocho acciones del backend; condiciones `all`, `any`, `not`, `some` y nueve operadores; guards `require`, bindings tipados, interpolación/default y salidas previas `_steps`.
 - Importar/exportar YAML; validar, versionar, activar/desactivar; evaluar condiciones históricas, inspeccionar eventos, ejecuciones, logs, auditoría y métricas. Guardar no activa una regla. Operaciones con efectos requieren confirmación.
 - El lienzo representa la secuencia admitida por el motor, no un DAG arbitrario. No inventa paralelismo, routers, JQL fanout o acciones HTTP libres.
