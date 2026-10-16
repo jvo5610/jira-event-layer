@@ -125,6 +125,8 @@ python3 tools/selftest.py --full
 
 Este comando instala las dependencias fijadas, crea una base efímera propia, ejecuta todos los tests,
 construye la imagen y prueba el Compose distribuido, migraciones, reinicio y backup/restauración.
+El build usa una copia del código con directorios `0700` y archivos `0600` para comprobar
+que el usuario no-root del contenedor puede leerlo, independientemente del `umask` del builder.
 Elimina sólo los contenedores/redes/imágenes temporales que creó. No llama a Jira, Bitbucket ni AWS.
 Sin --full ejecuta la suite con Postgres real pero omite build/aceptación de contenedores.
 

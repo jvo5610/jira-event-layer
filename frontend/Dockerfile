@@ -9,7 +9,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.27@sha256:4d01caf3b22dfd11003455e2e68153da
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
-COPY tools/studio_server.py tools/studio_access.py ./tools/
+COPY --chown=10001:10001 tools/studio_server.py tools/studio_access.py ./tools/
 COPY --from=build /ui/dist /app/frontend/dist
 ENV PATH="/app/.venv/bin:$PATH" PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 STUDIO_HOST=0.0.0.0 STUDIO_PORT=8080
 USER 10001:10001

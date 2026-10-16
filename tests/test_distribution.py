@@ -8,6 +8,12 @@ from tools.e2e_live import parse_args, rule_yaml, run
 from app.dsl import parse_rule
 
 
+def test_runtime_code_is_owned_by_the_nonroot_image_user():
+    root = Path(__file__).resolve().parents[1]
+    assert "COPY --chown=10001:10001 app ./app" in (root / "Dockerfile").read_text()
+    assert "COPY --chown=10001:10001 tools/studio_server.py tools/studio_access.py ./tools/" in (root / "frontend/Dockerfile").read_text()
+
+
 def test_live_runner_destinations_are_arguments_not_environment(monkeypatch):
     monkeypatch.setenv("E2E_BITBUCKET_REPOSITORY", "unexpected/repo")
     args = parse_args(["--provider", "bitbucket", "--output", "unused",

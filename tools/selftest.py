@@ -7,6 +7,7 @@ import argparse
 import os
 from pathlib import Path
 import secrets
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -51,7 +52,16 @@ def main():
             run(["uv", "sync", "--frozen"], env=env)
             run(["uv", "run", "--frozen", "pytest", "-q"], env=env)
             if args.full:
-                run(["docker", "build", "-t", image, "."])
+                # A deployment builder may check out source with umask 077.
+                # The image's non-root user must still be able to import code/SQL.
+                context = Path(directory) / "private-build-context"
+                context.mkdir(mode=0o700)
+                for filename in ("Dockerfile", "pyproject.toml", "uv.lock", ".dockerignore"):
+                    shutil.copyfile(root / filename, context / filename)
+                shutil.copytree(root / "app", context / "app", ignore=shutil.ignore_patterns("__pycache__"))
+                for item in [context / "app", *(context / "app").rglob("*")]:
+                    item.chmod(0o700 if item.is_dir() else 0o600)
+                run(["docker", "build", "-t", image, str(context)])
                 run(["uv", "run", "--frozen", "python", "tools/smoke_container.py", "--image", image], env=env)
         finally:
             run(["docker", "rm", "-f", "-v", name], quiet=True, check=False)
