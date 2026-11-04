@@ -1,8 +1,11 @@
 import hashlib
 import hmac
 import json
+import logging
+import re
+import time
 from contextlib import asynccontextmanager
-from uuid import UUID
+from uuid import UUID, uuid4
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -18,9 +21,11 @@ from app.auth import required_permission
 from app.tokens import TokenManager, DatabaseAuthenticator
 from app.catalog import SAMPLE_LIMIT, VISITS_PER_EVENT, discover
 from app.dsl import Rule, RuleError, match, parse_rule
+from app.event_context import EVENT_FIELDS, event_document
 from app.safety import validate_safety
 from app.actors import exclusion_reason
 from app.store import Conflict, Store, principal
+from app.observability import fingerprint, log_event, request_id
 
 YAML_BODY = {"requestBody": {"required": True, "content": {
     "application/yaml": {"schema": {"type": "string", "maxLength": 65536}}
@@ -43,9 +48,7 @@ class Evaluation(BaseModel):
     model_config = ConfigDict(extra="forbid")
     yaml: str = Field(max_length=65536)
     event_ids: list[UUID] = Field(default_factory=list, max_length=100)
-    source: str = "jira"
-    event_type: str = "jira:issue_updated"
-    payload: dict | None = None
+    event: dict | None = None
 
 
 class Comparison(BaseModel):
@@ -70,6 +73,7 @@ class TokenCreation(BaseModel):
 def create_app(settings=None, store=None, authenticator=None):
     @asynccontextmanager
     async def lifespan(app):
+        log_event("api_starting")
         app.state.settings = settings or Settings.from_env("api")
         app.state.store = store or Store(app.state.settings.database, app.state.settings.tenant)
         await run_in_threadpool(app.state.store.open)
@@ -80,9 +84,11 @@ def create_app(settings=None, store=None, authenticator=None):
                 supplier = lambda: cfg.admin_bootstrap_token if cfg.admin_bootstrap_token is not None else secret("ADMIN_BOOTSTRAP_TOKEN")
                 await run_in_threadpool(app.state.tokens.bootstrap, supplier, cfg.webhook_secret)
             app.state.authenticator = authenticator or DatabaseAuthenticator(app.state.tokens)
+            log_event("api_ready")
             yield
         finally:
             await run_in_threadpool(app.state.store.close)
+            log_event("api_stopped")
 
     app = FastAPI(title="Jira Relay API", version="1.0.0", lifespan=lifespan,
                   openapi_url=None, docs_url=None, redoc_url=None,
@@ -92,9 +98,11 @@ def create_app(settings=None, store=None, authenticator=None):
     def authorize(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
         identity = request.state.identity
         if identity is None:
+            request.state.failure_reason = "api_authentication_required"
             raise HTTPException(401, "Valid API bearer token required", headers={"WWW-Authenticate": "Bearer"})
         permission = required_permission(request.method, request.scope["route"].path)
         if permission is not None and permission not in identity.permissions:
+            request.state.failure_reason = "api_permission_denied"
             raise HTTPException(403, "Credential does not permit this operation")
 
     @app.middleware("http")
@@ -106,6 +114,7 @@ def create_app(settings=None, store=None, authenticator=None):
         try:
             identity = await request.app.state.authenticator.authenticate(request.headers.get("Authorization", "")) if management else None
         except (OperationalError, PoolTimeout):
+            request.state.failure_reason = "authentication_persistence_unavailable"
             return JSONResponse({"detail": "Authentication persistence unavailable"}, status_code=503)
         request.state.identity = identity
         actor = identity.subject if identity else "anonymous"
@@ -113,7 +122,9 @@ def create_app(settings=None, store=None, authenticator=None):
         data = bytearray()
         async for chunk in request.stream():
             data.extend(chunk)
+            request.state.body_bytes = len(data)
             if len(data) > cfg.max_body:
+                request.state.failure_reason = "body_too_large"
                 return JSONResponse({"detail": "Body exceeds configured limit"}, status_code=413)
         request._body = bytes(data)
         context = principal.set(actor)
@@ -125,21 +136,63 @@ def create_app(settings=None, store=None, authenticator=None):
         response.headers["X-Content-Type-Options"] = "nosniff"
         return response
 
+    @app.middleware("http")
+    async def request_logging(request, call_next):
+        identifier = str(uuid4())
+        token = request_id.set(identifier)
+        started = time.monotonic()
+        method = request.method if request.method in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"} else "OTHER"
+        webhook = request.url.path == "/webhooks/jira"
+        ray = request.headers.get("CF-Ray", "")
+        fields = {"method": method}
+        if re.fullmatch(r"[a-fA-F0-9]{16}-[A-Z]{3}", ray):
+            fields["cf_ray"] = ray
+        if webhook:
+            fields.update(signature_present=bool(request.headers.get("X-Hub-Signature")),
+                          identifier_present=bool(request.headers.get("X-Atlassian-Webhook-Identifier")),
+                          delivery_id_sha256=fingerprint(request.headers.get("X-Atlassian-Webhook-Identifier", "")))
+        try:
+            if webhook:
+                log_event("webhook_received", **fields)
+            try:
+                response = await call_next(request)
+            except Exception as exc:
+                log_event("http_request_failed", level=logging.ERROR, **fields,
+                          route=getattr(request.scope.get("route"), "path", "unmatched"),
+                          status=500, error_kind=type(exc).__name__,
+                          duration_ms=round((time.monotonic() - started) * 1000, 2))
+                raise
+            response.headers["X-Request-ID"] = identifier
+            level = logging.ERROR if response.status_code >= 500 else logging.WARNING if response.status_code >= 400 else logging.INFO
+            log_event("http_request_completed", level=level, **fields,
+                      route=getattr(request.scope.get("route"), "path", "unmatched"),
+                      status=response.status_code,
+                      reason=getattr(request.state, "failure_reason", None),
+                      body_bytes=getattr(request.state, "body_bytes", 0),
+                      duration_ms=round((time.monotonic() - started) * 1000, 2))
+            return response
+        finally:
+            request_id.reset(token)
+
     @app.exception_handler(RuleError)
     async def invalid(request, exc):
+        request.state.failure_reason = "rule_invalid"
         return JSONResponse({"detail": str(exc)}, status_code=422)
 
     @app.exception_handler(Conflict)
     async def conflict(request, exc):
+        request.state.failure_reason = "conflict"
         return JSONResponse({"detail": str(exc)}, status_code=409)
 
     @app.exception_handler(KeyError)
     async def missing(request, exc):
+        request.state.failure_reason = "not_found"
         return JSONResponse({"detail": "Resource not found"}, status_code=404)
 
     @app.exception_handler(OperationalError)
     @app.exception_handler(PoolTimeout)
     async def database_unavailable(request, exc):
+        request.state.failure_reason = "persistence_unavailable"
         return JSONResponse({"detail": "Persistence unavailable; retry delivery"}, status_code=503)
 
     @app.get("/healthz")
@@ -202,9 +255,10 @@ def create_app(settings=None, store=None, authenticator=None):
 
     @app.get("/v1/catalog/fields", dependencies=[Depends(authorize)])
     def catalog_fields(request: Request, source: str = Query(max_length=100), event_type: str = Query(max_length=100)):
-        rows = request.app.state.store.query("WITH recent AS MATERIALIZED (SELECT id,payload,received_at FROM events WHERE source=%s AND event_type=%s AND payload_redacted_at IS NULL ORDER BY received_at DESC,id DESC LIMIT %s), ranked AS (SELECT *,row_number() OVER (PARTITION BY coalesce(payload#>>'{issue,fields,issuetype,id}','') ORDER BY received_at DESC,id DESC) AS rank FROM recent) SELECT payload FROM ranked ORDER BY rank,received_at DESC,id DESC", (source, event_type, SAMPLE_LIMIT))
+        columns = ",".join(EVENT_FIELDS)
+        rows = request.app.state.store.query(f"WITH recent AS MATERIALIZED (SELECT {columns} FROM events WHERE source=%s AND event_type=%s AND payload_redacted_at IS NULL ORDER BY received_at DESC,id DESC LIMIT %s), ranked AS (SELECT *,row_number() OVER (PARTITION BY coalesce(payload#>>'{{issue,fields,issuetype,id}}','') ORDER BY received_at DESC,id DESC) AS rank FROM recent) SELECT {columns} FROM ranked ORDER BY rank,received_at DESC,id DESC", (source, event_type, SAMPLE_LIMIT))
         return {"sample_count": len(rows), "sample_limit": SAMPLE_LIMIT, "candidate_limit": SAMPLE_LIMIT,
-                "sampling": "latest events, issue-type interleaved", "fields": discover(row["payload"] for row in rows),
+                "sampling": "latest events, issue-type interleaved", "fields": discover(event_document(row) for row in rows),
                 "limits": {"fields": 500, "visits_per_event": VISITS_PER_EVENT, "depth": 16, "array_items": 3},
                 "notice": "Observed fields, not a complete provider schema. Previews prefer non-empty values; sensitive fields are withheld and text is truncated. Objects/lists show structure only."}
 
@@ -272,10 +326,11 @@ def create_app(settings=None, store=None, authenticator=None):
                 for field in discover([{'_steps': {str(step): row['result']}}], max_fields=100, breadth_first=True):
                     if field['path'] != '_steps':
                         fields.append({**field, 'step': step, 'action_type': actions[step]['type']})
-            events = store.query('SELECT payload FROM events WHERE id=%s AND payload_redacted_at IS NULL', (run['event_id'],))
+            columns = ",".join(EVENT_FIELDS)
+            events = store.query(f'SELECT {columns} FROM events WHERE id=%s AND payload_redacted_at IS NULL', (run['event_id'],))
             if not events:
                 continue
-            payload = {k:v for k,v in events[0]['payload'].items() if k != '_steps'}
+            payload = event_document(events[0])
             return {'run_id': run['id'], 'created_at': run['created_at'], 'status': run['status'],
                     'version': version, 'before_step': before_step, 'fields': fields[:900],
                     'event_fields': discover([payload]), 'sample': True,
@@ -293,21 +348,27 @@ def create_app(settings=None, store=None, authenticator=None):
         return request.app.state.store.disable(name)
 
     def sample(ids, request):
-        rows = request.app.state.store.query("SELECT id,source,event_type,payload,payload_redacted_at FROM events WHERE id=ANY(%s)", (ids,))
+        rows = request.app.state.store.query(
+            "SELECT " + ",".join(EVENT_FIELDS) + " FROM events WHERE id=ANY(%s)",
+            (ids,))
         if len(rows) != len(set(ids)):
             raise KeyError("event")
         if any(row["payload_redacted_at"] is not None for row in rows):
             raise Conflict("Selected event payload has been redacted")
-        return rows
+        return [event_document(row) for row in rows]
 
     @app.post("/v1/evaluate", dependencies=[Depends(authorize)])
     def evaluate(body: Evaluation, request: Request):
         rule, digest = parse_rule(body.yaml)
         rows = sample(body.event_ids, request)
-        if body.payload is not None:
-            rows.append({"id": None, "source": body.source, "event_type": body.event_type, "payload": body.payload})
+        if body.event is not None:
+            if (body.event.get("source") not in {"jira", "test"}
+                    or not isinstance(body.event.get("event_type"), str)
+                    or not isinstance(body.event.get("payload"), dict)):
+                raise RuleError("event requires source, event_type and an object payload")
+            rows.append(event_document(body.event))
         return {"sha256": digest, "executed": False, "results": [
-            {"event_id": row["id"], "trace": match(rule, row["source"], row["event_type"], row["payload"])} for row in rows]}
+            {"event_id": row["id"], "trace": match(rule, row["source"], row["event_type"], row)} for row in rows]}
 
     @app.post("/v1/compare", dependencies=[Depends(authorize)])
     def compare(body: Comparison, request: Request):
@@ -315,8 +376,8 @@ def create_app(settings=None, store=None, authenticator=None):
         right, rd = parse_rule(body.right_yaml)
         results = []
         for event in sample(body.event_ids, request):
-            a = match(left, event["source"], event["event_type"], event["payload"])
-            b = match(right, event["source"], event["event_type"], event["payload"])
+            a = match(left, event["source"], event["event_type"], event)
+            b = match(right, event["source"], event["event_type"], event)
             results.append({"event_id": event["id"], "left": a, "right": b, "changed": a["matched"] != b["matched"]})
         return {"executed": False, "left_sha256": ld, "right_sha256": rd,
                 "changed": sum(r["changed"] for r in results), "results": results}
@@ -327,9 +388,11 @@ def create_app(settings=None, store=None, authenticator=None):
         cfg = request.app.state.settings
         expected = "sha256=" + hmac.new(cfg.webhook_secret.encode(), raw, hashlib.sha256).hexdigest()
         if not cfg.webhook_secret or not hmac.compare_digest(expected.encode(), request.headers.get("X-Hub-Signature", "").encode()):
+            request.state.failure_reason = "invalid_webhook_signature" if request.headers.get("X-Hub-Signature") else "missing_webhook_signature"
             raise HTTPException(401, "Invalid webhook signature")
         delivery = request.headers.get("X-Atlassian-Webhook-Identifier", "")
         if not delivery or len(delivery) > 250:
+            request.state.failure_reason = "invalid_webhook_identifier" if delivery else "missing_webhook_identifier"
             raise HTTPException(400, "Stable webhook identifier required")
         try:
             payload = strict_json(raw)
@@ -337,6 +400,7 @@ def create_app(settings=None, store=None, authenticator=None):
             if not isinstance(event_type, str) or not 1 <= len(event_type) <= 100:
                 raise ValueError()
         except (ValueError, KeyError, TypeError, RecursionError):
+            request.state.failure_reason = "invalid_webhook_payload"
             raise HTTPException(400, "Invalid Jira event") from None
         return await run_in_threadpool(request.app.state.store.ingest, cfg.tenant, "jira", delivery, event_type, payload, raw)
 
@@ -359,20 +423,34 @@ def create_app(settings=None, store=None, authenticator=None):
 
     @app.get("/v1/events", dependencies=[Depends(authorize)])
     def events(request: Request, limit: int = Query(50, ge=1, le=100), source: str | None = Query(None, max_length=100), event_type: str | None = Query(None, max_length=100), before: UUID | None = None):
-        return request.app.state.store.query("SELECT id,source,event_type,delivery_id,received_at,processed_at,attempts,last_error,payload#>>'{issue,key}' AS issue_key,payload#>>'{issue,fields,issuetype,name}' AS issue_type,left(payload#>>'{issue,fields,summary}',200) AS issue_summary FROM events WHERE (%s::text IS NULL OR source=%s) AND (%s::text IS NULL OR event_type=%s) AND (%s::uuid IS NULL OR (received_at,id)<(SELECT received_at,id FROM events WHERE id=%s)) ORDER BY received_at DESC,id DESC LIMIT %s", (source, source, event_type, event_type, before, before, limit))
+        return request.app.state.store.query("SELECT id,source,event_type,delivery_id,received_at,processed_at,attempts,last_error,enrichment_status,enrichment_attempts,enrichment_error,enriched_at,payload#>>'{issue,key}' AS issue_key,payload#>>'{issue,fields,issuetype,name}' AS issue_type,left(payload#>>'{issue,fields,summary}',200) AS issue_summary FROM events WHERE (%s::text IS NULL OR source=%s) AND (%s::text IS NULL OR event_type=%s) AND (%s::uuid IS NULL OR (received_at,id)<(SELECT received_at,id FROM events WHERE id=%s)) ORDER BY received_at DESC,id DESC LIMIT %s", (source, source, event_type, event_type, before, before, limit))
 
     @app.get("/v1/events/{event_id}", dependencies=[Depends(authorize)])
     def event(event_id: UUID, request: Request):
-        rows = request.app.state.store.query("SELECT id,source,event_type,payload,received_at,processed_at,payload_redacted_at,last_error FROM events WHERE id=%s", (event_id,))
+        rows = request.app.state.store.query(
+            "SELECT " + ",".join(EVENT_FIELDS) + " FROM events WHERE id=%s", (event_id,))
+        if not rows:
+            raise KeyError(str(event_id))
+        return event_document(rows[0])
+
+    @app.get("/v1/events/{event_id}/diagnostics", dependencies=[Depends(authorize)])
+    def event_diagnostics(event_id: UUID, request: Request):
+        rows = request.app.state.store.query(
+            "SELECT " + ",".join(EVENT_FIELDS) + " FROM events WHERE id=%s", (event_id,))
         if not rows:
             raise KeyError(str(event_id))
         with request.app.state.store.pool.connection() as conn:
             blocked = exclusion_reason(conn, rows[0])
-        return {**rows[0], 'execution_blocked_reason': blocked, "evaluations": request.app.state.store.query("SELECT * FROM evaluations WHERE event_id=%s", (event_id,))}
+        return {'event_id': str(event_id), 'execution_blocked_reason': blocked,
+                "evaluations": request.app.state.store.query("SELECT * FROM evaluations WHERE event_id=%s", (event_id,))}
 
     @app.post("/v1/events/{event_id}/execute", dependencies=[Depends(authorize)])
     def execute(event_id: UUID, request: Request):
         return request.app.state.store.execute(event_id)
+
+    @app.post("/v1/events/{event_id}/enrichment/retry", dependencies=[Depends(authorize)])
+    def retry_enrichment(event_id: UUID, request: Request):
+        return request.app.state.store.requeue_enrichment(event_id)
 
     @app.get("/v1/runs", dependencies=[Depends(authorize)])
     def runs(request: Request, limit: int = Query(50, ge=1, le=100), before: UUID | None = None):

@@ -24,9 +24,9 @@ def context_fixture(client, store, suffix=''):
     from test_integration import activate, ingest
     spec={'apiVersion':'automation/v1','kind':'Rule','name':'context-example',
           'trigger':{'source':'jira','event':'jira:issue_updated'},
-          'when':{'path':'issue.key','op':'exists'},'description':suffix,
-          'actions':[{'type':'jira.issue.get','issue':{'path':'issue.key'}},
-                     {'type':'jira.issue.get','issue':{'path':'issue.key'}}]}
+          'when':{'path':'payload.issue.key','op':'exists'},'description':suffix,
+          'actions':[{'type':'jira.issue.get','issue':{'path':'payload.issue.key'}},
+                     {'type':'jira.issue.get','issue':{'path':'payload.issue.key'}}]}
     saved=activate(client,yaml.safe_dump(spec))
     event=ingest(client,key='ctx-'+suffix,payload={'issue':{'key':'KAN-1'},'_steps':{'0':{'forged':'not trusted'}}})
     run=event['runs'][0]['id']
@@ -51,8 +51,9 @@ def test_editor_context_returns_only_durable_previous_results_with_safe_nested_e
     assert fields['_steps["0"].key']['example']=='KAN-1'
     assert all(f['step']==0 for f in data['fields'])
     assert not any(f['path'].startswith('_steps') for f in data['event_fields'])
-    for hidden in ['private@example.com','hidden-value','FUTURE-9','FAILED-8','not trusted']:
+    for hidden in ['private@example.com','hidden-value','FUTURE-9','FAILED-8']:
         assert hidden not in str(data)
+    assert any(f['path'].startswith('payload._steps') for f in data['event_fields'])
     assert client.get(path,params={'before_step':3}).status_code==422
     assert client.get(path,params={'before_step':1},headers={'Authorization':''}).status_code==401
 
@@ -69,7 +70,7 @@ def test_editor_context_does_not_cross_runs_versions_or_redacted_events(env):
     path=f'/v1/rules/context-example/versions/{saved["version"]}/context?before_step=1'
     data=client.get(path).json()
     assert data['run_id']==run
-    assert next(f for f in data['event_fields'] if f['path']=='issue.key')['example']=='KAN-1'
+    assert next(f for f in data['event_fields'] if f['path']=='payload.issue.key')['example']=='KAN-1'
     newer,_,_=context_fixture(client,store,'v2')
     assert client.get(f'/v1/rules/context-example/versions/{newer["version"]}/context?before_step=1').json()['sample'] is False
     store.query('UPDATE events SET payload_redacted_at=now() WHERE id=%s RETURNING id',(event['event_id'],))
@@ -183,8 +184,8 @@ def test_catalog_uses_last_100_matching_events_and_a_populated_example(env):
     data = client.get('/v1/catalog/fields', params={'source':'jira','event_type':'jira:issue_updated'}).json()
     assert data['sample_count'] == 100 and data['sample_limit'] == 100
     fields = {f['path']: f for f in data['fields']}
-    assert 'old_only' not in fields
-    assert fields['issue.fields.status.name']['example'] == 'Done'
+    assert 'payload.old_only' not in fields
+    assert fields['payload.issue.fields.status.name']['example'] == 'Done'
 
 
 def test_keyset_events_and_runs(env):

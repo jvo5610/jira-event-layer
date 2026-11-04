@@ -178,7 +178,7 @@ previa. Funciona con descripciones vacías. No combines agregado y reemplazo del
 campo. Como es lectura seguida de escritura, no garantiza un append atómico frente
 a ediciones concurrentes de otras personas o integraciones.
 
-Para dispararlo al asignar a alguien, el filtro de `changelog.items` debe exigir en
+Para dispararlo al asignar a alguien, el filtro de `payload.changelog.items` debe exigir en
 un mismo elemento `fieldId = assignee`, `to` existente, distinto de null y distinto de
 texto vacío. No exige una lista fija de personas. La desasignación no coincide; las
 reasignaciones sí. Los eventos de la cuenta del servicio siguen excluidos globalmente.

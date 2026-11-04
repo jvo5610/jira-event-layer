@@ -24,8 +24,8 @@ def registered(env, actor='relay-service', token='actor-test-token'):
 
 def read_rule(client, event_type='jira:issue_updated'):
     return activate(client, yaml.safe_dump({'apiVersion': 'automation/v1', 'kind': 'Rule', 'name': 'actor-test',
-        'trigger': {'source': 'jira', 'event': event_type}, 'when': {'path': 'issue.key', 'op': 'exists'},
-        'actions': [{'type': 'jira.issue.get', 'issue': '${issue.key}'}]}))
+        'trigger': {'source': 'jira', 'event': event_type}, 'when': {'path': 'payload.issue.key', 'op': 'exists'},
+        'actions': [{'type': 'jira.issue.get', 'issue': '${payload.issue.key}'}]}))
 
 
 def send(env, listener, event_type, payload, key='actor-event'):
@@ -59,7 +59,8 @@ def test_service_actor_is_ignored_globally_for_every_event_and_ingress(env, webh
     assert client.post('/v1/events/' + event['event_id'] + '/execute').status_code == 409
     assert send(env, listener, event_type, payload)['duplicate']
     detail = client.get('/v1/events/' + event['event_id']).json()
-    assert detail['execution_blocked_reason'] == detail['last_error'] == 'ignored_service_actor'
+    assert detail['last_error'] == 'ignored_service_actor'
+    assert client.get('/v1/events/' + event['event_id'] + '/diagnostics').json()['execution_blocked_reason'] == 'ignored_service_actor'
     assert detail['payload']['user']['accountId'] == 'relay-service'
 
 
@@ -173,7 +174,7 @@ def test_queued_service_event_is_blocked_after_identity_discovery(env):
     event = send(env, None, 'jira:issue_updated', {'user': {'accountId': 'relay-service'}, 'issue': {'key': 'KAN-1'}})
     assert len(event['runs']) == 1
     cfg = registered(env)
-    assert client.get('/v1/events/' + event['event_id']).json()['execution_blocked_reason'] == 'ignored_service_actor'
+    assert client.get('/v1/events/' + event['event_id'] + '/diagnostics').json()['execution_blocked_reason'] == 'ignored_service_actor'
     with httpx.Client(transport=httpx.MockTransport(lambda _: pytest.fail('must not contact provider'))) as remote:
         worker = Worker(store, cfg, jira=Jira(cfg, remote))
         try:

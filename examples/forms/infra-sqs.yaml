@@ -1,0 +1,180 @@
+apiVersion: automation/v1
+kind: Rule
+name: forms-infra-sqs
+description: Derivar SQS a Infra dentro de DEMO.
+trigger:
+  source: jira
+  event: jira:issue_created
+when:
+  all:
+  - path: payload.issue.fields.project.key
+    op: eq
+    value: DEMO
+  - path: payload.issue.fields.issuetype.id
+    op: eq
+    value: '10001'
+  - path: payload.issue.fields.customfield_10010.requestType.id
+    op: eq
+    value: '10000'
+  - path: enrichment_status
+    op: eq
+    value: completed
+  - path: enrichment.forms[0].formTemplate.id
+    op: eq
+    value: 11111111-1111-4111-8111-111111111111
+  - path: enrichment.forms[0].submitted
+    op: eq
+    value: true
+  - path: enrichment.forms[0].answers.recursos
+    op: contains
+    value: SQS
+  - any:
+    - path: enrichment.forms[0].answers.sqs_more
+      op: eq
+      value: 'No'
+    - path: enrichment.forms[0].answers.sqs_more
+      op: exists
+      value: false
+  - all:
+    - path: enrichment.forms[0].answers.sqs_name
+      op: exists
+      value: true
+    - path: enrichment.forms[0].answers.sqs_name
+      op: ne
+      value: null
+    - path: enrichment.forms[0].answers.sqs_name
+      op: ne
+      value: ''
+  - all:
+    - path: enrichment.forms[0].answers.sqs_why
+      op: exists
+      value: true
+    - path: enrichment.forms[0].answers.sqs_why
+      op: ne
+      value: null
+    - path: enrichment.forms[0].answers.sqs_why
+      op: ne
+      value: ''
+  - all:
+    - path: enrichment.forms[0].answers.aws_account
+      op: exists
+      value: true
+    - path: enrichment.forms[0].answers.aws_account
+      op: ne
+      value: null
+    - path: enrichment.forms[0].answers.aws_account
+      op: ne
+      value: ''
+  - all:
+    - path: enrichment.forms[0].answers.sqs_type
+      op: exists
+      value: true
+    - path: enrichment.forms[0].answers.sqs_type
+      op: ne
+      value: null
+    - path: enrichment.forms[0].answers.sqs_type
+      op: ne
+      value: ''
+  - all:
+    - path: enrichment.forms[0].answers.sqs_visibility
+      op: exists
+      value: true
+    - path: enrichment.forms[0].answers.sqs_visibility
+      op: ne
+      value: null
+    - path: enrichment.forms[0].answers.sqs_visibility
+      op: ne
+      value: ''
+  - all:
+    - path: enrichment.forms[0].answers.sqs_retention
+      op: exists
+      value: true
+    - path: enrichment.forms[0].answers.sqs_retention
+      op: ne
+      value: null
+    - path: enrichment.forms[0].answers.sqs_retention
+      op: ne
+      value: ''
+  - all:
+    - path: enrichment.forms[0].answers.sqs_producers
+      op: exists
+      value: true
+    - path: enrichment.forms[0].answers.sqs_producers
+      op: ne
+      value: null
+    - path: enrichment.forms[0].answers.sqs_producers
+      op: ne
+      value: ''
+  - all:
+    - path: enrichment.forms[0].answers.sqs_consumers
+      op: exists
+      value: true
+    - path: enrichment.forms[0].answers.sqs_consumers
+      op: ne
+      value: null
+    - path: enrichment.forms[0].answers.sqs_consumers
+      op: ne
+      value: ''
+  - all:
+    - path: enrichment.forms[0].answers.descripcion
+      op: exists
+      value: true
+    - path: enrichment.forms[0].answers.descripcion
+      op: ne
+      value: null
+    - path: enrichment.forms[0].answers.descripcion
+      op: ne
+      value: ''
+  - all:
+    - path: enrichment.forms[0].answers.linea
+      op: exists
+      value: true
+    - path: enrichment.forms[0].answers.linea
+      op: ne
+      value: null
+    - path: enrichment.forms[0].answers.linea
+      op: ne
+      value: ''
+actions:
+- type: jira.issue.get
+  issue: ${payload.issue.key}
+  require:
+    all:
+    - path: fields.project.key
+      op: eq
+      value: DEMO
+    - path: fields.issuetype.id
+      op: eq
+      value: '10001'
+- type: jira.issue.create
+  project: DEMO
+  issue_type_id: '10002'
+  fields:
+    summary: Crear cola SQS ${enrichment.forms[0].answers.sqs_name}
+    description: |
+      Descripción general
+      ${enrichment.forms[0].answers.descripcion}
+
+      Línea: ${enrichment.forms[0].answers.linea}
+
+      Solicitud de cola SQS
+      Finalidad de la cola: ${enrichment.forms[0].answers.sqs_why}
+      Nombre de la cola: ${enrichment.forms[0].answers.sqs_name}
+      Cuenta AWS de la cola: ${enrichment.forms[0].answers.aws_account}
+      Productores: ${enrichment.forms[0].answers.sqs_producers}
+      Consumidores: ${enrichment.forms[0].answers.sqs_consumers}
+      Tipo de cola: ${enrichment.forms[0].answers.sqs_type}
+      Retención de mensajes: ${enrichment.forms[0].answers.sqs_retention}
+      Visibility timeout: ${enrichment.forms[0].answers.sqs_visibility} segundos
+
+      Otra información
+      Escalado desde: ${payload.issue.key} — ${payload.issue.fields.summary}
+      https://jira.example.com/browse/${payload.issue.key}
+    labels:
+    - infra
+    - sqs
+    - jira-relay-test
+- type: jira.issue.link
+  inward: ${payload.issue.key}
+  outward: ${_steps["1"].key}
+  link_type_id: '10003'

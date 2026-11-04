@@ -10,12 +10,24 @@ No requiere LLM, Redis, SQS ni un proveedor cloud específico.
 
 **Contrato v1, versión 1.0.0 candidata; sin certificación general de producción.** Hay ocho acciones,
 hasta diez pasos secuenciales por regla y filtros deterministas. No hay paridad completa con Jira
-Automation/Make: no implementa scheduling, routers/paralelismo, fanout JQL, compensaciones ni JSM
-específico. El [inventario de capacidades](use-cases.json) y los [pendientes de producción](#pendiente-para-producción)
+Automation/Make: no implementa scheduling, routers/paralelismo, fanout JQL, compensaciones ni provisión de infraestructura. El [inventario de capacidades](use-cases.json) y los [pendientes de producción](#pendiente-para-producción)
 separan implementación de aceptación operativa. No está afiliado a Atlassian. Licencia [MIT](LICENSE).
 
 El nombre del repositorio y del paquete Python sigue siendo `jira-event-layer`; el producto se llama
 Jira Relay, el frontend `jira-relay-studio` y el contrato YAML `automation/v1`. No son servicios distintos.
+
+## Formularios y contrato de eventos
+
+Jira Relay obtiene dinámicamente los Forms asociados a solicitudes JSM y espera
+a que estén enviados antes de evaluar reglas. La API y el motor usan el mismo
+documento: `payload.issue.key` para el ticket y
+`enrichment.forms[n].answers` para las respuestas. Las reglas anteriores deben
+actualizar sus rutas. Ver [contrato, configuración y ejemplos de delegación](docs/forms-routing.md).
+
+![Arquitectura del backend](docs/architecture.png)
+
+El backend tiene dos procesos: API y worker, con la misma imagen y PostgreSQL
+como almacenamiento y cola durable. Studio se conecta a la API por separado.
 
 ## Por dónde empezar
 
@@ -293,11 +305,13 @@ validar emisión, audience/issuer, permisos y revocación/expiración según el 
 | GET /v1/rules/{name}/versions/{version}/context?before_step=N | Contexto histórico anterior al paso N; sólo lectura |
 | POST /v1/rules/{name}/activate | Activar/rollback con version y sha256 explícitos |
 | POST /v1/rules/{name}/disable | Desactivar nuevos eventos y frenar pasos pendientes; no revierte llamadas ya enviadas |
-| POST /v1/evaluate | YAML + payload o event_ids; devuelve explicación, sin ejecutar |
+| POST /v1/evaluate | YAML + event o event_ids; devuelve explicación, sin ejecutar |
 | POST /v1/compare | left_yaml + right_yaml + event_ids; diferencias de coincidencia, sin ejecutar |
 | POST /webhooks/jira | Webhook nativo firmado HMAC; persistir antes de 202 |
 | POST /v1/events | Ingesta autenticada con Idempotency-Key |
-| GET /v1/events, /v1/events/{id} | Histórico y decisiones por regla |
+| GET /v1/events, /v1/events/{id} | Histórico y documento completo del evento |
+| GET /v1/events/{id}/diagnostics | Evaluaciones y bloqueo por actor |
+| POST /v1/events/{id}/enrichment/retry | Reintentar un enriquecimiento fallido |
 | POST /v1/events/{id}/execute | Evaluar versiones activas; no duplica la misma versión/evento |
 | GET /v1/runs, /v1/runs/{id} | Estado y log de ejecución |
 | POST /v1/runs/{id}/reconcile | Adjuntar UUID verificado de pipeline a un resultado ambiguo; no repite POST |
@@ -305,7 +319,7 @@ validar emisión, audience/issuer, permisos y revocación/expiración según el 
 
 Los POST de YAML aceptan el documento crudo, con Content-Type: application/yaml.
 Activación: {"version":1,"sha256":"checksum devuelto al guardar"}.
-Evaluación: {"yaml":"...","source":"jira","event_type":"jira:issue_updated","payload":{...}}.
+Evaluación: {"yaml":"...","event":{"source":"jira","event_type":"jira:issue_updated","payload":{...}}}.
 Comparación: {"left_yaml":"...","right_yaml":"...","event_ids":["uuid"]}.
 Ingesta: {"source":"jira","event_type":"jira:issue_updated","payload":{...}}.
 
@@ -328,9 +342,9 @@ trigger:
   event: jira:issue_updated
 when:
   all:
-    - {path: issue.fields.project.key, op: eq, value: KAN}
+    - {path: payload.issue.fields.project.key, op: eq, value: KAN}
     - some:
-        path: changelog.items
+        path: payload.changelog.items
         where:
           all:
             - {path: fieldId, op: eq, value: assignee}
@@ -339,7 +353,7 @@ when:
             - {path: to, op: ne, value: ""}
 actions:
   - type: jira.issue.edit
-    issue: {path: issue.key}
+    issue: {path: payload.issue.key}
     append_description: {value: "Se asigno!"}
 ```
 
@@ -350,7 +364,7 @@ el operador esté listo para efectos reales. Luego asignar un ticket desde otra 
 el evento y su ejecución, y comprobar en Jira el nuevo párrafo. La actualización generada por la
 cuenta del servicio se conserva como ignorada y no vuelve a ejecutar el flujo.
 
-Para editar el padre, cambiar solamente el destino a `issue: {path: issue.fields.parent.key}`.
+Para editar el padre, cambiar solamente el destino a `issue: {path: payload.issue.fields.parent.key}`.
 Para tomar un valor de una consulta previa, usar por ejemplo
 `fields: {summary: {path: '_steps["0"].fields.summary'}}` en un paso posterior al `jira.issue.get`.
 La ruta del evento y la salida de un paso son fuentes distintas; ver
@@ -362,19 +376,19 @@ Ver `examples/repository-request.yaml` para un flujo breve y
 `examples/all-v1-variations.yaml` como catálogo comentado de todas las variantes v1.
 DSL automation/v1 / Rule; name identifica una regla.
 Trigger source+event y when con all/any/not/some. Predicados: eq/ne/in/contains/exists/gt/gte/lt/lte.
-Paths son referencias relativas al objeto leído, sin prefijo `$`: `issue.key`, `changelog.items`.
+Paths son referencias relativas al objeto leído, sin prefijo `$`: `payload.issue.key`, `payload.changelog.items`.
 `some` evalúa `where` sobre cada elemento de la lista, no sobre el evento completo.
 Igualdad tipada: true no equivale a 1. Un campo ausente no satisface ne; usar exists explícitamente.
-Las entradas de acciones aceptan literales normales y referencias `"${issue.key}"`.
-Una referencia completa conserva el tipo JSON original; `"Ticket ${issue.key}"` produce texto.
-`'$${issue.key}'` produce el texto literal `${issue.key}`. Claves literales e índices funcionan
-dentro de referencias: `'${issue.fields["some.value"][0].name}'`.
+Las entradas de acciones aceptan literales normales y referencias `"${payload.issue.key}"`.
+Una referencia completa conserva el tipo JSON original; `"Ticket ${payload.issue.key}"` produce texto.
+`'$${payload.issue.key}'` produce el texto literal `${payload.issue.key}`. Claves literales e índices funcionan
+dentro de referencias: `'${payload.issue.fields["some.value"][0].name}'`.
 Un campo inexistente falla; no se ejecutan expresiones ni se reinterpreta el contenido obtenido.
 La interpolación dentro de texto solo admite escalares no nulos, con booleanos `true`/`false`;
 objetos y listas deben usarse como referencia completa en campos Jira, no en variables Bitbucket.
 Máximo 4096 caracteres por plantilla y 50 referencias; las acciones mantienen sus límites de salida.
 La forma explícita sigue disponible: `{value: "${texto-literal}"}` no interpola y
-`{path: issue.key, default: "..."}` permite un default. Objetos literales usan `{value: {...}}`.
+`{path: payload.issue.key, default: "..."}` permite un default. Objetos literales usan `{value: {...}}`.
 Las referencias funcionan en campos/variables y argumentos de acciones que aceptan bindings;
 no en nombres de repositorios, ramas, IDs de configuración o predicados `when`.
 La versión 1 acepta únicamente esta sintaxis; los JSON Pointer históricos no son válidos.
@@ -385,14 +399,14 @@ No hay eval, shell, Jinja, Python en YAML, URLs arbitrarias ni resolución de se
 
 ```yaml
 # Campos anidados: puntos entre identificadores.
-path: issue.fields.summary
+path: payload.issue.fields.summary
 
 # Una clave literal puede contener puntos, espacios, barras o símbolos.
 path: 'this["some.value"].is_literal'
-path: 'issue.fields["Nombre del repositorio"]'
+path: 'payload.issue.fields["Nombre del repositorio"]'
 
 # Índices de listas: enteros no negativos, comenzando en cero.
-path: issue.fields.components[0].name
+path: payload.issue.fields.components[0].name
 
 # Una clave numérica de un objeto es una cadena, no un índice.
 path: '_steps["0"].key'
@@ -465,7 +479,7 @@ desde Postgres; un evento entrante no puede sobrescribirlo. Las cadenas se reanu
 Ejemplo: examples/jira-create-from-source.yaml (borrador, nunca activado automáticamente).
 
 En Studio, **Ticket a editar** permite escribir una clave Jira o elegir con `{ }` el dato
-que la contiene, incluido `issue.fields.parent.key` para editar el padre. **Agregar campo**
+que la contiene, incluido `payload.issue.fields.parent.key` para editar el padre. **Agregar campo**
 abre directamente su editor de nuevo valor; no hay que elegir un modo de binding para
 esta operación. Los controles técnicos se conservan en Opciones avanzadas.
 Los selectores muestran datos del evento y resultados anidados de acciones anteriores,
@@ -628,11 +642,11 @@ despliegue. `POST /v1/rules/validate` comprueba seguridad incluso con `targets=f
 borrador sigue permitido, pero **activarlo exige superar estos controles**:
 
 - Toda regla con efectos (incluidos pipelines) debe acotar el origen con `eq` o un `in` no vacío
-  sobre `issue.key`, `issue.fields.project.key` o `issue.fields.project.id`. `exists`, `ne`, `not`,
+  sobre `payload.issue.key`, `payload.issue.fields.project.key` o `payload.issue.fields.project.id`. `exists`, `ne`, `not`,
   `contains` y listas vacías no cuentan como alcance. No se imponen proyectos por env var.
 - En `any`, cada rama debe garantizar alcance. Un `all` exterior puede aportar una restricción
   común. El análisis es conservador: no intenta resolver equivalencias lógicas arbitrarias.
-- Si el trigger es `jira:issue_updated`, debe existir un `some` positivo sobre `changelog.items`
+- Si el trigger es `jira:issue_updated`, debe existir un `some` positivo sobre `payload.changelog.items`
   cuyo **mismo `where`** garantice `field`/`fieldId` y una comparación positiva `eq`/`in` sobre
   `from`, `to`, `fromString` o `toString`. La mera presencia del changelog o del campo no alcanza.
   El caso específico **asignar a cualquier persona** admite `fieldId`/`field = assignee`
@@ -641,7 +655,7 @@ borrador sigue permitido, pero **activarlo exige superar estos controles**:
 - Una transición necesita `from_status_id` y `to_status_id` distintos. Se comprueba el estado
   actual antes del envío, aunque Jira puede cambiar concurrentemente después de esa lectura.
 - Los destinos de acciones Jira deben ser una clave literal (incluido cross-project) o una
-  referencia a un único valor: `issue.key`, `issue.fields.parent.key`, un custom field que
+  referencia a un único valor: `payload.issue.key`, `payload.issue.fields.parent.key`, un custom field que
   contenga una clave, o un resultado anterior como `_steps["0"].fields.parent.key`.
   La gramática no permite búsquedas, comodines ni iteraciones. Antes de cualquier HTTP o
   reserva de escritura se valida que el resultado sea exactamente una clave Jira; listas,
@@ -656,9 +670,9 @@ Ejemplo mínimo de filtro de una escritura disparada por actualización:
 ```yaml
 when:
   all:
-    - {path: issue.fields.project.key, op: eq, value: SUPPORT}
+    - {path: payload.issue.fields.project.key, op: eq, value: SUPPORT}
     - some:
-        path: changelog.items
+        path: payload.changelog.items
         where:
           all:
             - {path: field, op: eq, value: status}
@@ -711,7 +725,7 @@ Antes de evaluar reglas, el ingreso nativo y `POST /v1/events` aplican la misma 
   ya iniciado, pero no continuar con nuevas acciones del evento excluido.
 
 La GUI muestra el motivo y deshabilita ejecutar esos eventos; el backend lo impide aunque se llame
-directamente a la API. `GET /v1/events/{id}` incluye `execution_blocked_reason` y `last_error`.
+directamente a la API. `GET /v1/events/{id}` expone `last_error`; `GET /v1/events/{id}/diagnostics` incluye `execution_blocked_reason` y las evaluaciones.
 La exclusión funciona también para el origen autenticado `test` si su payload identifica una cuenta
 del servicio. Los eventos sintéticos sin actor siguen siendo una función privilegiada del operador;
 la API autenticada no prueba que un actor declarado por ese operador sea auténtico.
@@ -1052,6 +1066,8 @@ sin una env var nueva por token y sin RBAC individual de usuarios de GUI por aho
 | `JIRA_CLIENT_SECRET` **†** | Junto con `JIRA_CLIENT_ID` | Client secret; token temporal obtenido y renovado sólo en memoria. |
 | `JIRA_API_TOKEN` **†** | Alternativa sin OAuth | API token estático Bearer; no combinar con las credenciales OAuth. |
 | `JIRA_CLOUD_ID` | Para ejecutar acciones Jira | UUID del sitio Jira Cloud. |
+| `ALLOWED_JIRA_PROJECTS` | Obligatorio si hay credenciales Jira | Proyectos permitidos, separados por comas; por ejemplo `DEMO,OPS`. |
+| `JIRA_FORMS_EMPTY_RETRIES` | `10`; rango 1–100 | Reintentos para esperar formularios disponibles y enviados antes de evaluar reglas. |
 | `JIRA_MAX_DAILY_WRITES` | `100`; rango 1–100000 | Intentos de escritura por ventana móvil de 24 h, compartidos en DB. |
 
 ### Conector Bitbucket

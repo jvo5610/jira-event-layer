@@ -19,15 +19,15 @@ def ingest(client, key='event-1', payload=EVENT):
 def setup(env, actions, handler):
     client, store, settings = env
     cfg = config()
-    for field in ("jira_token", "jira_cloud_id"):
+    for field in ("jira_token", "jira_cloud_id", "allowed_jira_projects"):
         setattr(settings, field, getattr(cfg, field))
     # Other tests exercise the handshake; these provider fixtures start with a
     # previously verified credential mapping, as a restarted worker would.
     store.remember_jira_actor(settings, 'relay-fixture')
     rule = rule_for(actions)
     rule.when = {'all': [
-        {'path': 'issue.fields.project.key', 'op': 'in', 'value': ['DEMO', 'KAN']},
-        {'some': {'path': 'changelog.items', 'where': {'all': [
+        {'path': 'payload.issue.fields.project.key', 'op': 'in', 'value': ['DEMO', 'KAN']},
+        {'some': {'path': 'payload.changelog.items', 'where': {'all': [
             {'path': 'field', 'op': 'eq', 'value': 'status'},
             {'path': 'toString', 'op': 'eq', 'value': 'Done'}]}}}]}
     activate(client, yaml.safe_dump(rule.model_dump()))
@@ -58,6 +58,17 @@ def test_create_then_comment_reuses_durable_step_result(env):
     assert [r.method for r in requests] == ["POST", "GET", "POST"]
 
 
+def test_worker_marks_disallowed_project_failed_without_provider_call(env):
+    action = {**ACTIONS[0], "project": "OTHER"}
+    client, store, settings, worker = setup(
+        env, [action], lambda _: pytest.fail("Disallowed project reached Jira"))
+    ingest(client, payload={"issue": issue()})
+    assert worker.tick()
+    run = client.get("/v1/runs").json()[0]
+    assert run["status"] == "failed"
+    assert run["last_error"] == "jira_project_not_allowed"
+
+
 @pytest.mark.parametrize('description',[None,{'type':'doc','version':1,'content':[{'type':'paragraph','content':[{'type':'text','text':'Keep formatting','marks':[{'type':'strong'}]}]}]}])
 def test_assignment_append_worker_and_service_echo_exclusion(env,description):
     from test_safety import assignment_change, PROJECT
@@ -72,7 +83,7 @@ def test_assignment_append_worker_and_service_echo_exclusion(env,description):
         return httpx.Response(204)
     rule={'apiVersion':'automation/v1','kind':'Rule','name':'assignment-append',
           'trigger':{'source':'jira','event':'jira:issue_updated'},'when':{'all':[PROJECT,assignment_change()]},
-          'actions':[{'type':'jira.issue.edit','issue':{'path':'issue.key'},'append_description':'Se asigno!'}]}
+          'actions':[{'type':'jira.issue.edit','issue':{'path':'payload.issue.key'},'append_description':'Se asigno!'}]}
     activate(client,yaml.safe_dump(rule))
     worker=Worker(store,settings,jira=Jira(settings,httpx.Client(transport=httpx.MockTransport(provider))))
     for number,person in enumerate(['person-1','person-2']):

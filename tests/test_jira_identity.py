@@ -33,6 +33,7 @@ def adapter(labels=None):
         writes.append(json.loads(request.content))
         return httpx.Response(204) if request.method == "PUT" else httpx.Response(201, json={"key": "DEMO-2"})
     cfg = Settings("", "", "", jira_token="test-only",
+                   allowed_jira_projects=frozenset({"DEMO"}),
                    jira_cloud_id="11111111-1111-4111-8111-111111111111")
     return Jira(cfg, httpx.Client(transport=httpx.MockTransport(handle))), writes
 

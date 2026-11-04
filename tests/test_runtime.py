@@ -27,7 +27,7 @@ def configuration(monkeypatch):
              "BITBUCKET_ACCOUNT_EMAIL", "JIRA_ACCOUNT_EMAIL", "BITBUCKET_EMAIL", "BITBUCKET_TOKEN",
              "JIRA_EMAIL", "JIRA_TOKEN",
              "API_TOKEN", "ADMIN_TOKEN", "READER_TOKEN", "WRITER_TOKEN", "OPERATOR_TOKEN", "TENANT_ID", "AUTH_ROTATION_TTL_SECONDS",
-             "MAX_BODY_BYTES",
+             "ALLOWED_REPOSITORIES", "ALLOWED_JIRA_PROJECTS", "MAX_BODY_BYTES",
              "JIRA_MAX_DAILY_WRITES", "BITBUCKET_MAX_DAILY_WRITES"}
     for name in names:
         monkeypatch.delenv(name, raising=False)
@@ -39,6 +39,7 @@ def configuration(monkeypatch):
     monkeypatch.setenv("ADMIN_BOOTSTRAP_TOKEN", "a" * 40)
     monkeypatch.setenv("JIRA_WEBHOOK_SECRET", "b" * 40)
     monkeypatch.setenv("TENANT_ID", "independent-installation")
+    monkeypatch.setenv("ALLOWED_JIRA_PROJECTS", "DEMO")
     return monkeypatch
 
 
@@ -131,9 +132,9 @@ name: crear-repositorio
 trigger: {source: jira, event: "jira:issue_updated"}
 when:
   all:
-    - {path: issue.key, op: eq, value: DEMO-1}
+    - {path: payload.issue.key, op: eq, value: DEMO-1}
     - some:
-        path: changelog.items
+        path: payload.changelog.items
         where:
           all:
             - {path: field, op: eq, value: status}

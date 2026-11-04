@@ -11,6 +11,7 @@ SAFE_VALUES = {
     "issue.fields.priority.name", "webhookEvent",
     "issue.fields.parent.key", "issue.fields.parent.fields.issuetype.name",
 }
+SAFE_VALUES |= {"payload." + path for path in SAFE_VALUES}
 SAMPLE_LIMIT = 100
 VISITS_PER_EVENT = 2000
 SENSITIVE_KEY = re.compile(r'password|passwd|secret|token|authorization|cookie|apikey|credential|email|phone')
@@ -73,7 +74,7 @@ def discover(payloads, *, max_fields=500, budget=VISITS_PER_EVENT, breadth_first
             if not blocked and path in SAFE_VALUES and kind in {"string", "number", "boolean"}:
                 if len(str(value)) <= 120 and not SENSITIVE_TEXT.search(str(value)) and value not in entry["values"] and len(entry["values"]) < 8:
                     entry["values"].append(value)
-            if path == 'issue.fields.labels' and isinstance(value,list):
+            if path in {'issue.fields.labels', 'payload.issue.fields.labels'} and isinstance(value,list):
                 for item in value[:20]:
                     if isinstance(item,str) and len(item)<=120 and not SENSITIVE_TEXT.search(item) and item not in entry['values'] and len(entry['values'])<20:
                         entry['values'].append(item)

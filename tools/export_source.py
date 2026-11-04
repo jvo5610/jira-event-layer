@@ -13,7 +13,8 @@ import shutil
 ROOT_FILES = (".gitignore", ".dockerignore", ".env.example", "Dockerfile", "compose.yaml", "compose.dev.yaml",
               "pyproject.toml", "uv.lock", "README.md", "CONTRIBUTING.md", "SECURITY.md", "use-cases.json",
               ".github/workflows/ci.yml")
-STUDIO_FILES = ("compose.studio.yaml", ".env.studio.example", "docs/studio.md", "docs/technical-reference.md",
+STUDIO_FILES = ("compose.studio.yaml", ".env.studio.example", "docs/studio.md", "docs/technical-reference.md", "docs/forms-routing.md",
+                "docs/architecture.py", "docs/architecture.png",
                 "frontend/package.json", "frontend/package-lock.json", "frontend/tsconfig.json",
                 "frontend/index.html", "frontend/Dockerfile", "frontend/.dockerignore",
                 "frontend/src/main.tsx", "frontend/src/Canvas.tsx", "frontend/src/Forms.tsx",
@@ -49,7 +50,7 @@ def export(root, destination):
         if source.is_symlink() or not source.resolve().is_relative_to(root):
             raise ValueError(f"Refusing nonlocal source: {relative}")
         content = source.read_bytes()
-        if forbidden.search(content.decode("utf-8")):
+        if forbidden.search(content.decode("utf-8", errors="ignore")):
             raise ValueError(f"Potential credential in {relative}; source export refused")
         manifest[str(relative)] = hashlib.sha256(content).hexdigest()
     destination.mkdir(parents=True, mode=0o755)

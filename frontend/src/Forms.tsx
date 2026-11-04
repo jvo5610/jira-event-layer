@@ -95,7 +95,7 @@ export function SingleValueEditor({ value, onChange, suggestions, label, target 
   const reference = mode === "path";
   const structured = mode === "value" && typeof current !== "string";
   const targetSuggestions: Suggestion[] = [...suggestions];
-  if (target) for (const path of ["issue.key", "issue.fields.parent.key"]) {
+  if (target) for (const path of ["payload.issue.key", "payload.issue.fields.parent.key"]) {
     if (!targetSuggestions.some(s => s.path === path)) targetSuggestions.push({ path, types: ["string"] });
   }
   const options = target ? targetSuggestions.filter(isIssueTargetSuggestion) : suggestions;
@@ -118,7 +118,7 @@ export function SingleValueEditor({ value, onChange, suggestions, label, target 
     {reference && <small className="muted">{t("Dato seleccionado: se usará su valor al ejecutar, no el nombre de la ruta.")}</small>}
     {mode === "template" && <small className="muted">{t("Las referencias ${…} se reemplazan al ejecutar.")}</small>}
     {structured && <small className="muted">{t("Valor JSON. Podés editarlo en las opciones avanzadas.")}</small>}
-    {target && <small className="muted">{t("Debe resolver a una sola clave Jira. Para editar el padre, elegí issue.fields.parent.key. No admite búsquedas ni listas.")}</small>}
+    {target && <small className="muted">{t("Debe resolver a una sola clave Jira. Para editar el padre, elegí payload.issue.fields.parent.key. No admite búsquedas ni listas.")}</small>}
     {target && reference && <small className="muted">{t("Si el dato no existe o no es una clave Jira, la acción falla sin editar otro ticket.")}</small>}
     {picker && <DataPicker suggestions={options} onClose={() => setPicker(false)} onChoose={path => {
       onChange({ path }); setPicker(false);
@@ -192,7 +192,7 @@ export function PathInput({
           aria-label={t(label)}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder="issue.fields.status.name"
+          placeholder="payload.issue.fields.status.name"
         />
         <button
           title={t("Elegir dato")}
@@ -293,9 +293,9 @@ export function BindingEditor({
             onClick={() =>
               onChange(
                 key === "path"
-                  ? { path: "issue.key" }
+                  ? { path: "payload.issue.key" }
                   : key === "template"
-                    ? { template: "${issue.key}" }
+                    ? { template: "${payload.issue.key}" }
                     : { value: typed ? null : "" },
               )
             }
@@ -348,7 +348,7 @@ export function BindingEditor({
             rows={3}
             value={current ?? ""}
             onChange={(e) => onChange({ template: e.target.value })}
-            placeholder={"Ticket ${issue.key}"}
+            placeholder={"Ticket ${payload.issue.key}"}
           />
           <button className="text-button" onClick={() => setPicker(!picker)}>
             <Braces size={14} /> {t("Insertar referencia") + " "}
@@ -453,17 +453,19 @@ const operators: Record<string, string> = {
   lt: "menor que",
   lte: "menor o igual",
 };
-const leaf = () => ({ path: "issue.key", op: "exists" });
+const leaf = (relative = false) => ({ path: relative ? "" : "payload.issue.key", op: "exists" });
 export function FilterEditor({
   value,
   onChange,
   suggestions,
   depth = 0,
+  relative = false,
 }: {
   value: Obj;
   onChange: (v: Obj) => void;
   suggestions: Suggestion[];
   depth?: number;
+  relative?: boolean;
 }) {
   const kind =
     "all" in value
@@ -478,12 +480,12 @@ export function FilterEditor({
   const changeKind = (k: string) =>
     onChange(
       k === "predicate"
-        ? leaf()
+        ? leaf(relative)
         : k === "all" || k === "any"
           ? { [k]: [value] }
           : k === "not"
             ? { not: value }
-            : { some: { path: "changelog.items", where: leaf() } },
+            : { some: { path: relative ? "" : "payload.changelog.items", where: leaf(true) } },
     );
   if (depth > 12)
     return (
@@ -517,6 +519,7 @@ export function FilterEditor({
                 }
                 suggestions={suggestions}
                 depth={depth + 1}
+                relative={relative}
               />
               {value[kind].length > 1 && (
                 <button
@@ -538,7 +541,7 @@ export function FilterEditor({
           <button
             className="text-button"
             disabled={value[kind].length >= 32 || depth >= 12}
-            onClick={() => onChange({ [kind]: [...value[kind], leaf()] })}
+            onClick={() => onChange({ [kind]: [...value[kind], leaf(relative)] })}
           >
             <Plus size={14} /> {t("Agregar condición") + " "}
           </button>
@@ -549,6 +552,7 @@ export function FilterEditor({
           onChange={(v) => onChange({ not: v })}
           suggestions={suggestions}
           depth={depth + 1}
+          relative={relative}
         />
       ) : kind === "some" ? (
         <>
@@ -568,6 +572,7 @@ export function FilterEditor({
             onChange={(where) => onChange({ some: { ...value.some, where } })}
             suggestions={relativeSuggestions(suggestions, value.some.path)}
             depth={depth + 1}
+            relative
           />
         </>
       ) : (
@@ -816,7 +821,8 @@ export function ActionEditor({
                     <FilterEditor
                       value={action.require}
                       onChange={(v) => set("require", v)}
-                      suggestions={relativeSuggestions(suggestions, "issue")}
+                      suggestions={relativeSuggestions(suggestions, "payload.issue")}
+                      relative
                     />
                   </>
                 )}
@@ -865,7 +871,7 @@ export function ActionEditor({
               <button
                 className="text-button"
                 key={key}
-                onClick={() => set(key, { path: "issue.key" })}
+                onClick={() => set(key, { path: "payload.issue.key" })}
               >
                 <Plus size={14} /> {t(labels[key]) ?? key}{" "}
                 {t("(opcional)") + " "}

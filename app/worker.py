@@ -10,15 +10,15 @@ from psycopg.types.json import Jsonb
 
 from app.config import Settings, jira_configured
 from app.dsl import Rule, RuleError, render_action
+from app.event_context import EVENT_FIELDS, action_context, event_document
+from app.form_enrichment import build as build_form_enrichment, candidate as form_candidate
 from app.store import Store
 from app.jira import AmbiguousWrite, ExecutionIdentity, Jira, PreflightRetry, WriteRateLimited
 from app.health import worker_id
 from app.transport import bounded_request
 from app.safety import validate_safety
 from app.actors import credential_key, exclusion_reason
-
-log = logging.getLogger("automation.worker")
-
+from app.observability import log_event
 
 class Bitbucket:
     def __init__(self, settings, client=None):
@@ -42,6 +42,7 @@ class Worker:
         self.settings = settings
         self.connector = connector or Bitbucket(settings)
         self.jira = jira or Jira(settings)
+        self._prefer_enrichment = True
 
     def ensure_service_identity(self):
         if not jira_configured(self.settings):
@@ -80,7 +81,9 @@ class Worker:
             conn.execute("UPDATE runs SET status=%s,attempts=attempts+1,lease_until=now()+interval '120 seconds',lease_token=%s,updated_at=now() WHERE id=%s", (state, run["lease_token"], run["id"]))
             run["attempts"] += 1
             self.record(conn, run, state)
-            return run
+        log_event("run_claimed", run_id=run["id"], event_id=run["event_id"],
+                  step=run["step"], attempt=run["attempts"], status=state)
+        return run
 
     def finish(self, run, status, *, error=None, external_uuid=None, result=None, delay=0, advance=False):
         with self.store.pool.connection() as conn:
@@ -89,8 +92,12 @@ class Worker:
                           delay, int(advance), advance, run["id"], run["lease_token"])).fetchone()
             if not updated:
                 self.record(conn, run, "late_completion", {"external_uuid": external_uuid, "result": result, "error": error})
-                return
-            self.record(conn, run, status, {"error": error, "external_uuid": external_uuid, "result": result})
+            else:
+                self.record(conn, run, status, {"error": error, "external_uuid": external_uuid, "result": result})
+        log_event("run_updated" if updated else "run_late_completion",
+                  level=logging.WARNING if error or not updated else logging.INFO,
+                  run_id=run["id"], event_id=run["event_id"], step=run["step"],
+                  status=status if updated else "late_completion", error_present=bool(error))
 
     def reserve_jira_write(self, run):
         with self.store.pool.connection() as conn:
@@ -123,11 +130,57 @@ class Worker:
     def heartbeat(self):
         self.store.query("INSERT INTO worker_heartbeats(worker_id,last_seen) VALUES(%s,now()) ON CONFLICT(worker_id) DO UPDATE SET last_seen=now() RETURNING worker_id", (worker_id(),))
 
+    def tick_enrichment(self):
+        event = self.store.claim_enrichment()
+        if event is None:
+            return False
+        status, error = "completed", None
+        try:
+            self.ensure_service_identity()
+            metadata = form_candidate(event["source"], event["event_type"], event["payload"])
+            if metadata is None:
+                raise RuleError("jira_form_candidate_invalid")
+            def renew():
+                if not self.store.renew_enrichment(event):
+                    raise RuleError("enrichment_lease_lost")
+                self.heartbeat()
+            index, forms = self.jira.forms(metadata["issue_key"], progress=renew)
+            empty_retries = getattr(self.settings, "jira_forms_empty_retries", 10)
+            unsubmitted = any(item.get("submitted") is not True for item in index)
+            if unsubmitted and event["enrichment_attempts"] >= empty_retries:
+                self.store.fail_enrichment(event, "jira_forms_not_submitted")
+                status, error = "failed", "jira_forms_not_submitted"
+            elif (not index or unsubmitted) and event["enrichment_attempts"] < empty_retries:
+                delay = min(5 * event["enrichment_attempts"], 30)
+                error = "jira_forms_not_submitted" if unsubmitted else "jira_forms_not_ready"
+                self.store.retry_enrichment(event, error, delay)
+                status = "pending"
+            else:
+                enrichment = build_form_enrichment(index, forms)
+                if not self.store.complete_enrichment(event, enrichment):
+                    status, error = "late_completion", "enrichment_lease_lost"
+        except PreflightRetry as exc:
+            if event["enrichment_attempts"] < 10:
+                self.store.retry_enrichment(event, "jira_forms_retry", exc.delay)
+                status, error = "pending", "jira_forms_retry"
+            else:
+                self.store.fail_enrichment(event, "jira_forms_retry_exhausted")
+                status, error = "failed", "jira_forms_retry_exhausted"
+        except (RuleError, ValueError, TypeError) as exc:
+            error = str(exc)[:100] if isinstance(exc, RuleError) else "jira_form_invalid_data"
+            self.store.fail_enrichment(event, error)
+            status = "failed"
+        log_event("event_enrichment_updated", level=logging.WARNING if error else logging.INFO,
+                  event_id=event["id"], status=status, attempt=event["enrichment_attempts"],
+                  error_present=bool(error))
+        return True
+
     def execution_context(self, run, payload):
         # Only durable results of this run and earlier steps are trusted.
         # A webhook-supplied _steps object must never impersonate a result.
         results = self.store.query("SELECT step,detail FROM run_log WHERE run_id=%s AND step<%s AND status IN ('pending','succeeded') ORDER BY id", (run["id"], run["step"]))
-        return {**payload, "_steps": {str(r["step"]): r["detail"]["result"] for r in results if r["detail"].get("result") is not None}}
+        return action_context(payload, [{"step": row["step"], "result": row["detail"].get("result")}
+                                        for row in results])
 
     def tick_jira(self, run, rule, action, payload):
         try:
@@ -151,9 +204,16 @@ class Worker:
         return True
 
     def tick(self):
+        prefer_enrichment = getattr(self, "_prefer_enrichment", True)
+        if prefer_enrichment and self.tick_enrichment():
+            self._prefer_enrichment = False
+            return True
         run = self.claim()
         if run is None:
+            if not prefer_enrichment and self.tick_enrichment():
+                return True
             return False
+        self._prefer_enrichment = True
         if run['status'] != 'waiting':
             try:
                 self.ensure_service_identity()
@@ -164,7 +224,12 @@ class Worker:
             if reason:
                 self.finish(run, 'failed', error=reason)
                 return True
-        rows = self.store.query("SELECT v.spec,e.payload FROM rule_versions v JOIN events e ON e.id=%s WHERE v.rule_name=%s AND v.version=%s", (run["event_id"], run["rule_name"], run["version"]))
+        columns = ",".join("e." + key for key in EVENT_FIELDS)
+        rows = self.store.query(f"""SELECT v.spec,{columns}
+            FROM rule_versions v JOIN events e ON e.id=%s
+            WHERE v.rule_name=%s AND v.version=%s""",
+            (run["event_id"], run["rule_name"], run["version"]))
+        payload = event_document(rows[0])
         try:
             rule = Rule.model_validate(rows[0]['spec'])
             action = rule.actions[run['step']]
@@ -176,13 +241,13 @@ class Worker:
             self.finish(run, 'failed', error='unsafe_rule_execution_blocked')
             return True
         if action.type.startswith("jira."):
-            return self.tick_jira(run, rule, action, rows[0]["payload"])
+            return self.tick_jira(run, rule, action, payload)
         polling = run["status"] == "waiting"
         if polling and run["attempts"] > 720:
             self.finish(run, "needs_review", error="poll_budget_exhausted", external_uuid=run["external_uuid"])
             return True
         try:
-            payload = None if polling else render_action(action, self.execution_context(run, rows[0]["payload"]))
+            payload = None if polling else render_action(action, self.execution_context(run, payload))
             if not polling:
                 self.reserve_bitbucket_write(run)
             response = self.connector.call("GET" if polling else "POST", action, body=payload,
@@ -239,6 +304,7 @@ class Worker:
 
 def main():
     logging.basicConfig(level=logging.INFO)
+    log_event("worker_starting")
     settings = Settings.from_env(mode="worker")
     store = Store(settings.database, settings.tenant)
     store.open()
@@ -253,8 +319,10 @@ def main():
     try:
         try:
             worker.ensure_service_identity()
-        except (PreflightRetry, RuleError, ValueError, httpx.HTTPError):
+        except (PreflightRetry, RuleError, ValueError, httpx.HTTPError) as exc:
+            log_event("worker_identity_failed", level=logging.ERROR, error_kind=type(exc).__name__)
             raise SystemExit('Jira service identity could not be verified; GET /myself requires read:jira-user. Check token scopes and connectivity. No actions were dispatched.') from None
+        log_event("worker_ready")
         last_heartbeat = 0
         while not stop.is_set():
             try:
@@ -266,7 +334,7 @@ def main():
                     stop.wait(1)
             except Exception as exc:
                 # No exception payloads: HTTP/database errors may embed secrets.
-                log.error("worker_tick_failed kind=%s", type(exc).__name__)
+                log_event("worker_tick_failed", level=logging.ERROR, error_kind=type(exc).__name__)
                 stop.wait(3)
     finally:
         worker.connector.client.close()
@@ -276,6 +344,7 @@ def main():
         except Exception:
             pass
         store.close()
+        log_event("worker_stopped")
 
 
 if __name__ == "__main__":

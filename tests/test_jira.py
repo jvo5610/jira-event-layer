@@ -83,6 +83,7 @@ def test_invalid_append_text_has_no_mutation_or_reservation(suffix):
 
 def config():
     return Settings("unused", "a"*40, "b"*40, jira_token="test-only",
+                    allowed_jira_projects=frozenset({"DEMO"}),
                     jira_cloud_id="11111111-1111-4111-8111-111111111111")
 
 
@@ -99,7 +100,7 @@ def issue(key="DEMO-4", status="10001", labels=None):
 
 
 ACTIONS = [
-    {"type": "jira.issue.create", "project": "DEMO", "issue_type_id": "10003", "fields": {"summary": {"path": "issue.fields.summary"}}},
+    {"type": "jira.issue.create", "project": "DEMO", "issue_type_id": "10003", "fields": {"summary": {"path": "payload.issue.fields.summary"}}},
     {"type": "jira.issue.clone", "project": "DEMO", "issue_type_id": "10003", "source": {"value": "DEMO-4"}},
     {"type": "jira.issue.edit", "issue": {"value": "DEMO-4"}, "fields": {"summary": {"value": "New"}}},
     {"type": "jira.issue.transition", "issue": {"value": "DEMO-4"}, "from_status_id": "10001", "to_status_id": "10003"},
@@ -107,6 +108,36 @@ ACTIONS = [
     {"type": "jira.issue.link", "inward": {"value": "DEMO-4"}, "outward": {"value": "DEMO-5"}, "link_type_id": "10000"},
     {"type": "jira.issue.get", "issue": {"value": "DEMO-4"}, "require": {"path": "fields.status.id", "op": "eq", "value": "10001"}},
 ]
+
+
+@pytest.mark.parametrize("spec", ACTIONS)
+@pytest.mark.parametrize("allowed", [frozenset(), frozenset({"OTHER"})])
+def test_allowlist_blocks_all_actions_before_provider_calls(spec, allowed):
+    cfg = config()
+    cfg.allowed_jira_projects = allowed
+    adapter = Jira(cfg, httpx.Client(transport=httpx.MockTransport(
+        lambda _: pytest.fail("Disallowed projects must not reach Jira"))))
+    with pytest.raises(RuleError, match="jira_project_not_allowed"):
+        adapter.execute(rule_for([spec]).actions[0], {"payload": {"issue": issue()}}, IDENTITY,
+                        lambda: pytest.fail("No write reservation"))
+
+
+@pytest.mark.parametrize("spec", [
+    {"type": "jira.issue.clone", "project": "DEMO", "issue_type_id": "10003", "source": "OTHER-4"},
+    {"type": "jira.issue.clone", "project": "OTHER", "issue_type_id": "10003", "source": "DEMO-4"},
+    {"type": "jira.issue.create", "project": "DEMO", "issue_type_id": "10003", "parent": "OTHER-4", "fields": {"summary": "Child"}},
+    {"type": "jira.issue.link", "inward": "OTHER-4", "outward": "DEMO-4", "link_type_id": "10000"},
+    {"type": "jira.issue.link", "inward": "DEMO-4", "outward": "OTHER-4", "link_type_id": "10000"},
+])
+def test_allowlist_covers_clone_parent_and_both_link_endpoints(spec):
+    def provider(request):
+        assert request.method == "GET"
+        assert "/issue/DEMO-" in request.url.path
+        return httpx.Response(200, json=issue())
+    adapter = Jira(config(), httpx.Client(transport=httpx.MockTransport(provider)))
+    with pytest.raises(RuleError, match="jira_project_not_allowed"):
+        adapter.execute(rule_for([spec]).actions[0], {}, IDENTITY,
+                        lambda: pytest.fail("No write reservation"))
 
 
 @pytest.mark.parametrize("spec", ACTIONS)
@@ -127,7 +158,7 @@ def test_all_actions_roundtrip_and_dispatch(spec):
             return httpx.Response(204)
         return httpx.Response(201, json={"key": "DEMO-6", "id": "77"})
     adapter = Jira(config(), httpx.Client(transport=httpx.MockTransport(handler)))
-    result = adapter.execute(rule.actions[0], {"issue": issue()}, IDENTITY, lambda: reservations.append(True))
+    result = adapter.execute(rule.actions[0], {"payload": {"issue": issue()}}, IDENTITY, lambda: reservations.append(True))
     assert result
     mutations = [r for r in calls if r.method != "GET"]
     assert len(mutations) == len(reservations) == (0 if spec["type"] == "jira.issue.get" else 1)
@@ -210,7 +241,7 @@ def test_projects_and_customfields_do_not_require_server_allowlists():
 
 
 @pytest.mark.parametrize('project', ['DEMO', 'OTHER'])
-def test_customfield_write_in_any_jira_authorized_project(project):
+def test_customfield_write_in_each_allowed_project(project):
     key = project + '-4'
     writes = []
     def handle(request):
@@ -221,7 +252,9 @@ def test_customfield_write_in_any_jira_authorized_project(project):
         return httpx.Response(204)
     action = {'type': 'jira.issue.edit', 'issue': {'value': key},
               'fields': {'customfield_999': {'value': 'business-value'}}}
-    adapter = Jira(config(), httpx.Client(transport=httpx.MockTransport(handle)))
+    cfg = config()
+    cfg.allowed_jira_projects = frozenset({'DEMO', 'OTHER'})
+    adapter = Jira(cfg, httpx.Client(transport=httpx.MockTransport(handle)))
     adapter.execute(rule_for([action]).actions[0], {}, IDENTITY, lambda: None)
     assert writes == [{'fields': {'customfield_999': 'business-value'}}]
 
@@ -263,14 +296,14 @@ def test_create_ambiguous_never_retried(mode):
         return httpx.Response(201, json={}) if mode == "malformed" else httpx.Response(int(mode))
     adapter = Jira(config(), httpx.Client(transport=httpx.MockTransport(handler)))
     with pytest.raises(AmbiguousWrite):
-        adapter.execute(rule_for([ACTIONS[0]]).actions[0], {"issue": issue()}, IDENTITY, lambda: None)
+        adapter.execute(rule_for([ACTIONS[0]]).actions[0], {"payload": {"issue": issue()}}, IDENTITY, lambda: None)
     assert len(requests) == 1
 
 
 def test_write_rate_limit_distinguished_from_ambiguous_write():
     adapter = Jira(config(), httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(429, headers={"Retry-After": "4"}))))
     with pytest.raises(WriteRateLimited) as exc:
-        adapter.execute(rule_for([ACTIONS[0]]).actions[0], {"issue": issue()}, IDENTITY, lambda: None)
+        adapter.execute(rule_for([ACTIONS[0]]).actions[0], {"payload": {"issue": issue()}}, IDENTITY, lambda: None)
     assert exc.value.delay == 4
 
 
@@ -298,7 +331,7 @@ def test_plain_description_becomes_adf_and_missing_binding_rejected():
         bodies.append(json.loads(request.content))
         return httpx.Response(201, json={"key": "DEMO-6"})
     adapter = Jira(config(), httpx.Client(transport=httpx.MockTransport(handler)))
-    adapter.execute(rule_for([action]).actions[0], {"issue": issue()}, IDENTITY, lambda: None)
+    adapter.execute(rule_for([action]).actions[0], {"payload": {"issue": issue()}}, IDENTITY, lambda: None)
     assert bodies[0]["fields"]["description"]["type"] == "doc"
     with pytest.raises(RuleError, match="binding_missing"):
         adapter.execute(rule_for([action]).actions[0], {}, IDENTITY, lambda: pytest.fail("write forbidden"))
@@ -333,7 +366,7 @@ def test_create_subtask_uses_verified_parent():
         bodies.append(json.loads(request.content))
         return httpx.Response(201, json={"key": "DEMO-6"})
     adapter = Jira(config(), httpx.Client(transport=httpx.MockTransport(handler)))
-    adapter.execute(rule_for([action]).actions[0], {"issue": issue()}, IDENTITY, lambda: None)
+    adapter.execute(rule_for([action]).actions[0], {"payload": {"issue": issue()}}, IDENTITY, lambda: None)
     assert bodies[0]["fields"]["parent"] == {"key": "DEMO-4"}
     assert bodies[0]["fields"]["issuetype"] == {"id": "10004"}
 

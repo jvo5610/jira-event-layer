@@ -12,11 +12,13 @@ def redact(store, days=90, limit=100, apply=False):
     with store.pool.connection() as conn:
         rows = conn.execute("""SELECT e.id FROM events e
             WHERE payload_redacted_at IS NULL AND received_at<now()-%s*interval '1 day'
+            AND enrichment_status NOT IN ('pending','enriching')
             AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.event_id=e.id AND r.status NOT IN ('succeeded','failed'))
             ORDER BY received_at FOR UPDATE OF e SKIP LOCKED LIMIT %s""", (days, limit)).fetchall()
         ids = [r["id"] for r in rows]
         if apply and ids:
-            conn.execute("UPDATE events SET payload='{}',raw_body=''::bytea,payload_redacted_at=now() WHERE id=ANY(%s)", (ids,))
+            conn.execute("""UPDATE events SET payload='{}',enrichment=NULL,
+                raw_body=''::bytea,payload_redacted_at=now() WHERE id=ANY(%s)""", (ids,))
             conn.execute("UPDATE evaluations SET trace='{\"redacted\":true}' WHERE event_id=ANY(%s)", (ids,))
             conn.execute("UPDATE runs SET external_result=NULL WHERE event_id=ANY(%s)", (ids,))
             conn.execute("UPDATE run_log SET detail='{\"redacted\":true}' WHERE run_id IN (SELECT id FROM runs WHERE event_id=ANY(%s))", (ids,))

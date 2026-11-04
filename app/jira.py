@@ -4,12 +4,14 @@ import re
 import threading
 import time
 from copy import deepcopy
+from urllib.parse import quote
 from uuid import UUID
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.dsl import MISSING, RuleError, evaluate, lookup
+from app.form_enrichment import MAX_ENRICHMENT_BYTES, MAX_FORMS
 from app.transport import bounded_request
 
 FLOW_LABEL_PREFIX = "automation-flujo-"
@@ -163,6 +165,25 @@ class Jira:
                     headers={"Accept": "application/json", "Authorization": f"Bearer {self.access_token()}"}, follow_redirects=False)
         return response
 
+    def forms_request(self, path, *, max_bytes=256000):
+        try:
+            cloud_id = str(UUID(self.settings.jira_cloud_id))
+        except ValueError:
+            raise RuleError("jira_cloud_id_invalid") from None
+        url = f"https://api.atlassian.com/ex/jira/{cloud_id}/forms/{path}"
+        token = self.access_token()
+        response = bounded_request(self.client, "GET", url, max_bytes=max_bytes,
+            headers={"Accept": "application/json", "Authorization": f"Bearer {token}"},
+            follow_redirects=False)
+        if response.status_code == 401 and self.settings.jira_client_id:
+            with self._token_lock:
+                if self._access_token == token:
+                    self._access_token = ""
+            response = bounded_request(self.client, "GET", url, max_bytes=max_bytes,
+                headers={"Accept": "application/json", "Authorization": f"Bearer {self.access_token()}"},
+                follow_redirects=False)
+        return response
+
     def read(self, path):
         try:
             response = self.request("GET", path)
@@ -185,7 +206,12 @@ class Jira:
     def issue_key(self, value):
         if not isinstance(value, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{1,30}-[1-9][0-9]*", value):
             raise RuleError("jira_issue_key_invalid")
+        self.check_project(value.rsplit("-", 1)[0])
         return value
+
+    def check_project(self, project):
+        if project not in self.settings.allowed_jira_projects:
+            raise RuleError("jira_project_not_allowed")
 
     def service_account(self):
         from app.actors import account_id
@@ -202,6 +228,62 @@ class Jira:
         if issue.get("key") != key or actual.get("project", {}).get("key") != key.rsplit("-", 1)[0]:
             raise RuleError("jira_issue_scope_mismatch")
         return issue
+
+    def forms(self, value, progress=None):
+        key = self.issue_key(value)
+        try:
+            response = self.forms_request(f"issue/{key}/form")
+        except httpx.HTTPError:
+            raise PreflightRetry() from None
+        if response.status_code == 404:
+            raise PreflightRetry(5)
+        if response.status_code == 429 or response.status_code >= 500:
+            raise PreflightRetry(retry_delay(response))
+        if response.status_code != 200:
+            raise RuleError(f"jira_forms_index_http_{response.status_code}")
+        try:
+            index = response.json()
+            if not isinstance(index, list) or len(index) > MAX_FORMS:
+                raise ValueError()
+            identifiers = []
+            for item in index:
+                identifier = item.get("id") if isinstance(item, dict) else None
+                if (not isinstance(identifier, str) or not 1 <= len(identifier) <= 100
+                        or not re.fullmatch(r"[A-Za-z0-9_-]+", identifier)):
+                    raise ValueError()
+                identifiers.append(identifier)
+            if len(set(identifiers)) != len(identifiers):
+                raise ValueError()
+        except (ValueError, TypeError):
+            raise RuleError("jira_forms_index_invalid") from None
+
+        forms = []
+        total_bytes = 0
+        for identifier in identifiers:
+            try:
+                response = self.forms_request(
+                    f"issue/{key}/form/{quote(identifier, safe='')}", max_bytes=1_000_000)
+            except httpx.HTTPError:
+                raise PreflightRetry() from None
+            if response.status_code == 404:
+                raise PreflightRetry(5)
+            if response.status_code == 429 or response.status_code >= 500:
+                raise PreflightRetry(retry_delay(response))
+            if response.status_code != 200:
+                raise RuleError(f"jira_form_http_{response.status_code}")
+            total_bytes += len(response.content)
+            if total_bytes > MAX_ENRICHMENT_BYTES:
+                raise RuleError("jira_form_enrichment_too_large")
+            try:
+                form = response.json()
+                if not isinstance(form, dict):
+                    raise ValueError()
+            except ValueError:
+                raise RuleError("jira_form_invalid_response") from None
+            forms.append(form)
+            if progress is not None:
+                progress()
+        return index, forms
 
     def fields(self, bindings, payload):
         fields = {key: bind(binding, payload) for key, binding in bindings.items()}
@@ -252,6 +334,7 @@ class Jira:
         operation_id = identity.operation_id
         kind = action.type
         if kind in {"jira.issue.create", "jira.issue.clone"}:
+            self.check_project(action.project)
             fields = {}
             if kind == "jira.issue.clone":
                 source = self.issue(bind(action.source, payload))

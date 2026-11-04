@@ -6,7 +6,8 @@ import re
 
 MAX_PATH = 500
 PATH_DESCRIPTION = (
-    'Field reference relative to the object being read, without $. Use dots for '
+    'Field reference relative to the event JSON returned by GET /v1/events/{id}, '
+    'without $. Actions add trusted prior results under _steps. Use dots for '
     'ASCII identifiers, ["literal.key"] for exact JSON object keys (JSON string '
     'escapes supported), and [0] for zero-based array indexes. Indexes are '
     'nonnegative, without leading zeros. Inside some.where the root is the '
@@ -14,8 +15,8 @@ PATH_DESCRIPTION = (
     'Empty string selects the current object. No expressions, functions, '
     'wildcards, slices, JSON Pointer notation or recursion.'
 )
-PATH_EXAMPLES = ['issue.fields.summary', 'this["some.value"].is_literal',
-                 'issue.fields.components[0].name', '["Nombre del repositorio"]',
+PATH_EXAMPLES = ['payload.issue.fields.summary', 'this["some.value"].is_literal',
+                 'payload.issue.fields.components[0].name', '["Nombre del repositorio"]',
                  '_steps["0"].key', '']
 PATH_SYNTAX = {
     "syntax": "field-reference",

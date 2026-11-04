@@ -52,7 +52,7 @@ def required(name):
 def execute_case(client, actions, label, marker, timeout=240):
     spec = {"apiVersion": "automation/v1", "kind": "Rule", "name": label,
             "trigger": {"source": "test", "event": "automation.e2e"},
-            "when": {"path": "test_id", "op": "eq", "value": marker}, "actions": actions}
+            "when": {"path": "payload.test_id", "op": "eq", "value": marker}, "actions": actions}
     saved = client.post("/v1/rules", content=rule_yaml(spec), headers={"Content-Type": "application/yaml"})
     saved.raise_for_status()
     version = saved.json()
@@ -91,7 +91,7 @@ def execute_case(client, actions, label, marker, timeout=240):
 def run(args):
     if not args.allow_remote_writes:
         raise RuntimeError("Live acceptance creates remote resources. Pass --allow-remote-writes explicitly")
-    from app.config import load_environment, jira_credentials_from_env
+    from app.config import load_environment, jira_credentials_from_env, allowed_jira_projects_from_env
     load_environment()
     stamp = uuid.uuid4().hex[:12]
     name = "automation-live-" + stamp
@@ -107,6 +107,10 @@ def run(args):
         branch = args.bitbucket_branch
     if args.provider in {"jira", "all"}:
         jira_credentials = jira_credentials_from_env()
+        allowed_projects = allowed_jira_projects_from_env(required=True)
+        if args.jira_project not in allowed_projects:
+            raise RuntimeError("--jira-project must be included in ALLOWED_JIRA_PROJECTS")
+        config["ALLOWED_JIRA_PROJECTS"] = ",".join(sorted(allowed_projects))
         if jira_credentials['jira_client_id']:
             credential_names = ("JIRA_CLIENT_ID", "JIRA_CLIENT_SECRET", "JIRA_CLOUD_ID")
         else:
@@ -116,6 +120,7 @@ def run(args):
         from app.config import Settings
         from app.jira import Jira
         jira_provider = Jira(Settings({}, None, "", jira_cloud_id=config["JIRA_CLOUD_ID"],
+            allowed_jira_projects=allowed_projects,
             jira_token=config.get("JIRA_API_TOKEN", ""), jira_client_id=config.get("JIRA_CLIENT_ID", ""),
             jira_client_secret=config.get("JIRA_CLIENT_SECRET", "")))
         project = args.jira_project

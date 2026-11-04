@@ -38,18 +38,18 @@ def positive(node, paths, valid):
 
 
 def source_scope(node, source):
-    if positive(node, {('issue', 'key')}, lambda v: isinstance(v, str) and re.fullmatch(r'[A-Z][A-Z0-9_]{1,30}-[1-9][0-9]*', v)):
+    if positive(node, {('payload', 'issue', 'key')}, lambda v: isinstance(v, str) and re.fullmatch(r'[A-Z][A-Z0-9_]{1,30}-[1-9][0-9]*', v)):
         return True
-    if positive(node, {('issue', 'fields', 'project', 'key')}, lambda v: isinstance(v, str) and re.fullmatch(r'[A-Z][A-Z0-9_]{1,30}', v)):
+    if positive(node, {('payload', 'issue', 'fields', 'project', 'key')}, lambda v: isinstance(v, str) and re.fullmatch(r'[A-Z][A-Z0-9_]{1,30}', v)):
         return True
-    if positive(node, {('issue', 'fields', 'project', 'id')}, lambda v: isinstance(v, str) and re.fullmatch(r'[0-9]+', v)):
+    if positive(node, {('payload', 'issue', 'fields', 'project', 'id')}, lambda v: isinstance(v, str) and re.fullmatch(r'[0-9]+', v)):
         return True
     # Authenticated synthetic ingress also has to name a finite execution scope.
-    return source == 'test' and positive(node, {('test_id',)}, lambda v: isinstance(v, str) and bool(v.strip()))
+    return source == 'test' and positive(node, {('payload', 'test_id')}, lambda v: isinstance(v, str) and bool(v.strip()))
 
 
 def change_scope(node):
-    if 'some' not in node or path_keys(node['some']['path']) != ('changelog', 'items'):
+    if 'some' not in node or path_keys(node['some']['path']) != ('payload', 'changelog', 'items'):
         return False
     where = node['some']['where']
     field = lambda n: positive(n, {('field',), ('fieldId',)}, lambda v: isinstance(v, str) and bool(v.strip()))
@@ -86,7 +86,7 @@ def target_is_bounded(binding, index, actions):
     if not keys:
         return False
     # Field references never iterate: the path grammar has no wildcards, slices,
-    # queries or expressions. A parent/custom field is bounded just like issue.key.
+    # queries or expressions. A parent/custom field is bounded just like payload.issue.key.
     # Jira.issue_key checks the resolved STRING before any HTTP call or write budget
     # reservation; objects, lists, numeric IDs and JQL are not executable targets.
     if keys[0] != '_steps':
@@ -105,9 +105,9 @@ def validate_safety(rule):
     if all(action.type == 'jira.issue.get' for action in rule.actions):
         return
     if not guaranteed(rule.when, lambda n: source_scope(n, rule.trigger.source)):
-        raise RuleError('unsafe_write_scope: every matching branch must constrain issue.key or issue.fields.project.key/id with eq or nonempty in')
+        raise RuleError('unsafe_write_scope: every matching branch must constrain payload.issue.key or payload.issue.fields.project.key/id with eq or nonempty in')
     if rule.trigger.event == 'jira:issue_updated' and not guaranteed(rule.when, change_scope):
-        raise RuleError('unsafe_change_scope: issue_updated writes require some changelog.items with a positive field/fieldId and from/to/fromString/toString condition in the same where; assignee accepts to exists, ne null and ne empty string together')
+        raise RuleError('unsafe_change_scope: issue_updated writes require some payload.changelog.items with a positive field/fieldId and from/to/fromString/toString condition in the same where; assignee accepts to exists, ne null and ne empty string together')
     for index, action in enumerate(rule.actions):
         if action.type == 'jira.issue.transition' and (action.from_status_id is None or action.from_status_id == action.to_status_id):
             raise RuleError(f'unsafe_transition: action {index} requires distinct from_status_id and to_status_id')

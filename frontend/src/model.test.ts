@@ -77,15 +77,15 @@ describe("Full v1 editor contract", () => {
     expect(defs.length).toBe(1);
     expect(initialAction(defs[0])).toEqual({
       type: "jira.issue.get",
-      issue: { path: "issue.key" },
+      issue: { path: "payload.issue.key" },
     });
   });
   it("preserves binding semantics and defaults", () => {
     for (const value of [
       "literal",
-      "${issue.key}",
-      { template: "${issue.key}" },
-      { path: "issue.key", default: "fallback" },
+      "${payload.issue.key}",
+      { template: "${payload.issue.key}" },
+      { path: "payload.issue.key", default: "fallback" },
       { value: [1, false, null] },
       { value: { id: "3" } },
       { value: null },

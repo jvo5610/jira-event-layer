@@ -12,29 +12,29 @@ from app.safety import validate_safety
 from app.worker import Worker
 from test_integration import env, ingest
 
-PROJECT = {'path': 'issue.fields.project.key', 'op': 'eq', 'value': 'KAN'}
+PROJECT = {'path': 'payload.issue.fields.project.key', 'op': 'eq', 'value': 'KAN'}
 FIELD = {'path': 'field', 'op': 'eq', 'value': 'status'}
 VALUE = {'path': 'toString', 'op': 'eq', 'value': 'Done'}
-CHANGE = {'some': {'path': 'changelog.items', 'where': {'all': [FIELD, VALUE]}}}
-EXISTS = {'path': 'issue.key', 'op': 'exists'}
+CHANGE = {'some': {'path': 'payload.changelog.items', 'where': {'all': [FIELD, VALUE]}}}
+EXISTS = {'path': 'payload.issue.key', 'op': 'exists'}
 
 
 def spec():
     return {'apiVersion': 'automation/v1', 'kind': 'Rule', 'name': 'bounded-writes',
             'trigger': {'source': 'jira', 'event': 'jira:issue_updated'},
             'when': {'all': [copy.deepcopy(PROJECT), copy.deepcopy(CHANGE)]},
-            'actions': [{'type': 'jira.issue.edit', 'issue': '${issue.key}',
+            'actions': [{'type': 'jira.issue.edit', 'issue': '${payload.issue.key}',
                          'fields': {'summary': {'value': 'Updated'}}}]}
 
 
 @pytest.mark.parametrize('scope', [EXISTS, {'not': PROJECT},
-    {'path': 'issue.fields.project.key', 'op': 'ne', 'value': 'OTHER'},
-    {'path': 'issue.fields.project.key', 'op': 'in', 'value': []},
-    {'path': 'issue.fields.project.key', 'op': 'contains', 'value': ''},
+    {'path': 'payload.issue.fields.project.key', 'op': 'ne', 'value': 'OTHER'},
+    {'path': 'payload.issue.fields.project.key', 'op': 'in', 'value': []},
+    {'path': 'payload.issue.fields.project.key', 'op': 'contains', 'value': ''},
     {'any': [PROJECT, EXISTS]}, {'any': [PROJECT, {'not': EXISTS}]},
     {'some': {'path': 'items', 'where': PROJECT}},
-    {'path': 'issue.fields.project.key', 'op': 'eq', 'value': '*'},
-    {'path': 'issue.fields.project.key', 'op': 'eq', 'value': None}])
+    {'path': 'payload.issue.fields.project.key', 'op': 'eq', 'value': '*'},
+    {'path': 'payload.issue.fields.project.key', 'op': 'eq', 'value': None}])
 def test_every_write_branch_needs_positive_finite_source_scope(scope):
     raw = spec()
     raw['when'] = {'all': [scope, CHANGE]}
@@ -43,13 +43,13 @@ def test_every_write_branch_needs_positive_finite_source_scope(scope):
 
 
 @pytest.mark.parametrize('change', [EXISTS, {'not': CHANGE},
-    {'some': {'path': 'changelog.items', 'where': FIELD}},
-    {'some': {'path': 'changelog.items', 'where': VALUE}},
-    {'some': {'path': 'changelog.items', 'where': {'all': [FIELD, {'path': 'to', 'op': 'exists'}]}}},
-    {'some': {'path': 'changelog.items', 'where': {'any': [FIELD, VALUE]}}},
+    {'some': {'path': 'payload.changelog.items', 'where': FIELD}},
+    {'some': {'path': 'payload.changelog.items', 'where': VALUE}},
+    {'some': {'path': 'payload.changelog.items', 'where': {'all': [FIELD, {'path': 'to', 'op': 'exists'}]}}},
+    {'some': {'path': 'payload.changelog.items', 'where': {'any': [FIELD, VALUE]}}},
     {'any': [CHANGE, EXISTS]},
-    {'all': [{'some': {'path': 'changelog.items', 'where': FIELD}},
-             {'some': {'path': 'changelog.items', 'where': VALUE}}]},
+    {'all': [{'some': {'path': 'payload.changelog.items', 'where': FIELD}},
+             {'some': {'path': 'payload.changelog.items', 'where': VALUE}}]},
     {'some': {'path': 'unrelated.items', 'where': {'all': [FIELD, VALUE]}}}])
 def test_changed_field_and_value_must_be_guaranteed_in_same_item(change):
     raw = spec()
@@ -61,12 +61,12 @@ def test_changed_field_and_value_must_be_guaranteed_in_same_item(change):
 def test_nested_or_with_bounded_branches_and_bracket_aliases_is_accepted():
     raw = spec()
     raw['when'] = {'any': [raw['when'], {'all': [
-        {'path': 'issue["key"]', 'op': 'in', 'value': ['OPS-1', 'DEV-2']}, CHANGE]}]}
+        {'path': 'payload.issue["key"]', 'op': 'in', 'value': ['OPS-1', 'DEV-2']}, CHANGE]}]}
     validate_safety(Rule.model_validate(raw))
 
 
-@pytest.mark.parametrize('target', ['OTHER-${issue.fields.id}',
-    '${_steps["0"].key}', '${_steps["99"].key}', {'path': 'issue.key', 'default': 'OPS-1'}])
+@pytest.mark.parametrize('target', ['OTHER-${payload.issue.fields.id}',
+    '${_steps["0"].key}', '${_steps["99"].key}', {'path': 'payload.issue.key', 'default': 'OPS-1'}])
 def test_unbounded_or_future_targets_are_rejected(target):
     raw = spec()
     raw['actions'][0]['issue'] = target
@@ -81,8 +81,8 @@ def test_explicit_cross_project_target_and_trusted_previous_step_are_allowed():
     validate_safety(Rule.model_validate(raw))
 
 
-@pytest.mark.parametrize('path', ['issue.fields.parent.key', 'issue.fields.customfield_10090',
-    'issue.fields.issuelinks[0].inwardIssue.key'])
+@pytest.mark.parametrize('path', ['payload.issue.fields.parent.key', 'payload.issue.fields.customfield_10090',
+    'payload.issue.fields.issuelinks[0].inwardIssue.key'])
 def test_scalar_event_reference_targets_are_allowed(path):
     raw = spec()
     raw['actions'][0]['issue'] = {'path': path}
@@ -91,7 +91,7 @@ def test_scalar_event_reference_targets_are_allowed(path):
 
 def test_nested_previous_result_target_is_allowed_but_future_and_fallback_are_not():
     raw = spec()
-    raw['actions'].insert(0, {'type':'jira.issue.get','issue':{'path':'issue.key'}})
+    raw['actions'].insert(0, {'type':'jira.issue.get','issue':{'path':'payload.issue.key'}})
     raw['actions'][1]['issue'] = {'path':'_steps["0"].fields.parent.key'}
     validate_safety(Rule.model_validate(raw))
     for path in ['_steps["1"].fields.parent.key', '_steps["01"].key', '_steps[0].key', '_steps']:
@@ -103,7 +103,7 @@ def test_nested_previous_result_target_is_allowed_but_future_and_fallback_are_no
 @pytest.mark.parametrize('origin', [None, '10003'])
 def test_transition_requires_distinct_origin(origin):
     raw = spec()
-    raw['actions'] = [{'type': 'jira.issue.transition', 'issue': '${issue.key}',
+    raw['actions'] = [{'type': 'jira.issue.transition', 'issue': '${payload.issue.key}',
                        'from_status_id': origin, 'to_status_id': '10003'}]
     with pytest.raises(RuleError, match='unsafe_transition'):
         validate_safety(Rule.model_validate(raw))
@@ -112,7 +112,7 @@ def test_transition_requires_distinct_origin(origin):
 def test_read_only_drafts_do_not_need_write_scope():
     raw = spec()
     raw['when'] = EXISTS
-    raw['actions'] = [{'type': 'jira.issue.get', 'issue': '${issue.key}'}]
+    raw['actions'] = [{'type': 'jira.issue.get', 'issue': '${payload.issue.key}'}]
     validate_safety(Rule.model_validate(raw))
 
 
@@ -124,7 +124,7 @@ def test_created_event_requires_scope_but_not_changelog():
 
 
 def assignment_change():
-    return {'some':{'path':'changelog.items','where':{'all':[
+    return {'some':{'path':'payload.changelog.items','where':{'all':[
         {'path':'fieldId','op':'eq','value':'assignee'},
         {'path':'to','op':'exists','value':True},
         {'path':'to','op':'ne','value':None},
@@ -134,7 +134,7 @@ def assignment_change():
 def test_assignment_to_any_person_is_specific_without_account_allowlist():
     from app.dsl import match
     raw=spec(); raw['when']={'all':[PROJECT,assignment_change()]}
-    raw['actions']=[{'type':'jira.issue.edit','issue':{'path':'issue.key'},'append_description':{'value':'Se asigno!'}}]
+    raw['actions']=[{'type':'jira.issue.edit','issue':{'path':'payload.issue.key'},'append_description':{'value':'Se asigno!'}}]
     rule=Rule.model_validate(raw); validate_safety(rule)
     for changed,expected in [({'fieldId':'assignee','to':'person-1'},True),
                              ({'fieldId':'assignee','from':'person-2','to':'person-1'},True),
@@ -143,9 +143,9 @@ def test_assignment_to_any_person_is_specific_without_account_allowlist():
                              ({'fieldId':'assignee'},False),
                              ({'fieldId':'status','to':'10003'},False)]:
         payload={'issue':{'key':'KAN-1','fields':{'project':{'key':'KAN'}}},'changelog':{'items':[changed]}}
-        assert match(rule,'jira','jira:issue_updated',payload)['matched'] is expected
+        assert match(rule,'jira','jira:issue_updated',{'payload':payload})['matched'] is expected
     payload['changelog']['items']=[{'fieldId':'assignee','to':None},{'fieldId':'status','to':'10003'}]
-    assert not match(rule,'jira','jira:issue_updated',payload)['matched']
+    assert not match(rule,'jira','jira:issue_updated',{'payload':payload})['matched']
 
 
 @pytest.mark.parametrize('missing',range(4))
@@ -162,7 +162,7 @@ def test_test_source_is_not_a_blanket_safety_exemption():
     raw['when'] = EXISTS
     with pytest.raises(RuleError):
         validate_safety(Rule.model_validate(raw))
-    raw['when'] = {'path': 'test_id', 'op': 'eq', 'value': 'explicit-request-id'}
+    raw['when'] = {'path': 'payload.test_id', 'op': 'eq', 'value': 'explicit-request-id'}
     validate_safety(Rule.model_validate(raw))
 
 
@@ -177,13 +177,15 @@ def test_already_dispatched_pipeline_can_still_be_observed_without_new_writes():
         assert kwargs['body'] is None
         return httpx.Response(200, json={'uuid': '{pipeline}', 'state': {'name': 'COMPLETED', 'result': {'name': 'SUCCESSFUL'}}})
     worker = Worker.__new__(Worker)
-    worker.store = SimpleNamespace(query=lambda *args: [{'spec': raw, 'payload': {}}])
+    worker.store = SimpleNamespace(query=lambda *args: [{'spec': raw, 'payload': {}, 'enrichment': None}])
     worker.settings = SimpleNamespace()
     worker.connector = SimpleNamespace(call=call)
+    worker.tick_enrichment = lambda: True
     worker.claim = lambda: {'id': 'run', 'event_id': 'event', 'rule_name': raw['name'],
                             'version': 1, 'step': 0, 'status': 'waiting', 'attempts': 1, 'external_uuid': '{pipeline}'}
     worker.reserve_bitbucket_write = lambda run: pytest.fail('no new writes')
     worker.finish = lambda run, state, **kwargs: states.append(state)
+    assert worker.tick() and methods == []  # Enrichment wins the first fair-scheduling slot.
     assert worker.tick() and methods == ['GET'] and states == ['succeeded']
 
 

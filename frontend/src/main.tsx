@@ -120,6 +120,7 @@ function App() {
     null,
   );
   const [detail, setDetail] = useState<Obj | null>(null);
+  const [eventDiagnostics, setEventDiagnostics] = useState<Obj | null>(null);
   const [detailTitle, setDetailTitle] = useState("");
   const [fields, setFields] = useState<Suggestion[]>([]);
   const [sampleCount, setSampleCount] = useState(0);
@@ -428,7 +429,14 @@ function App() {
     tell(t("Regla desactivada."));
   };
   const inspect = async (kind: string, id: string) => {
-    setDetail(await api(`/v1/${kind}/${id}`));
+    setEventDiagnostics(null);
+    if (kind === "events") {
+      const [event, diagnostics] = await Promise.all([
+        api(`/v1/events/${id}`), api(`/v1/events/${id}/diagnostics`),
+      ]);
+      setDetail(event);
+      setEventDiagnostics(diagnostics);
+    } else setDetail(await api(`/v1/${kind}/${id}`));
     setDetailTitle(
       kind === "events"
         ? t("Detalle del evento")
@@ -1039,7 +1047,7 @@ function App() {
                     <>
                       <p className="muted">
                         {t(
-                          "El evento avanza solo cuando se cumple este filtro. Las rutas se evalúan sobre el payload original.",
+                          "El evento avanza solo cuando se cumple este filtro. Las rutas coinciden con el JSON del evento devuelto por la API.",
                         ) + " "}
                       </p>
                       <p className="muted">{t("Para escribir: acotá el proyecto o ticket con eq/in en cada rama. En issue_updated, indicá el campo cambiado y su valor anterior o nuevo dentro del mismo some.where.")}</p>
@@ -1682,7 +1690,7 @@ function App() {
             {detailTitle === "Detalle del evento" && (
               <div className="info-box">
                 <p>
-                  {eventExclusionMessage(detail) ?? (detail.payload_redacted_at
+                  {eventExclusionMessage(eventDiagnostics ?? detail) ?? (detail.payload_redacted_at
                     ? t(
                         "El payload fue eliminado por retención y no puede ejecutarse.",
                       )
@@ -1691,7 +1699,7 @@ function App() {
                       ))}
                 </p>
                 <button
-                  disabled={busy || !!detail.payload_redacted_at || !!eventExclusionMessage(detail)}
+                  disabled={busy || !!detail.payload_redacted_at || !!eventExclusionMessage(eventDiagnostics ?? detail)}
                   onClick={() =>
                     void task(async () => {
                       if (
@@ -1708,7 +1716,12 @@ function App() {
                         {},
                       );
                       tell(JSON.stringify(result));
-                      setDetail(await api(`/v1/events/${detail.id}`));
+                      const [event, diagnostics] = await Promise.all([
+                        api(`/v1/events/${detail.id}`),
+                        api(`/v1/events/${detail.id}/diagnostics`),
+                      ]);
+                      setDetail(event);
+                      setEventDiagnostics(diagnostics);
                     })
                   }
                 >
@@ -1763,6 +1776,10 @@ function App() {
               </div>
             )}
             <pre className="detail-json">{JSON.stringify(detail, null, 2)}</pre>
+            {detailTitle === t("Detalle del evento") && eventDiagnostics && <details>
+              <summary>{t("Diagnóstico del evento")}</summary>
+              <pre className="detail-json">{JSON.stringify(eventDiagnostics, null, 2)}</pre>
+            </details>}
           </section>
         </div>
       )}

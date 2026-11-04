@@ -19,6 +19,7 @@ CLOUD = "11111111-1111-4111-8111-111111111111"
 
 def oauth_settings():
     return Settings({}, None, "", jira_cloud_id=CLOUD,
+                    allowed_jira_projects=frozenset({"DEMO"}),
                     jira_client_id="client-test-only", jira_client_secret="secret-test-only")
 
 
@@ -102,6 +103,86 @@ def test_concurrent_callers_share_one_grant():
         with ThreadPoolExecutor(max_workers=8) as pool:
             assert set(pool.map(lambda _: jira.access_token(), range(20))) == {"access-test-only"}
     assert len(grants) == 1
+
+
+def test_forms_use_official_fixed_gateway_and_same_oauth_credential():
+    calls = []
+    renewals = []
+    form = {"design": {"questions": {}}, "state": {"answers": {}}}
+
+    def provider(request):
+        if request.url.host == "auth.atlassian.com":
+            return grant()
+        calls.append(request)
+        if request.url.path.endswith("/issue/DEMO-7/form"):
+            return httpx.Response(200, json=[{"id": "form-uuid", "name": "Dynamic form"}])
+        if request.url.path.endswith("/issue/DEMO-7/form/form-uuid"):
+            return httpx.Response(200, json=form)
+        return httpx.Response(404)
+
+    with httpx.Client(transport=httpx.MockTransport(provider)) as client:
+        index, forms = Jira(oauth_settings(), client).forms(
+            "DEMO-7", progress=lambda: renewals.append(True))
+
+    assert index == [{"id": "form-uuid", "name": "Dynamic form"}]
+    assert forms == [form]
+    assert len(calls) == 2
+    assert renewals == [True]
+    assert all(request.url.host == "api.atlassian.com" for request in calls)
+    assert all(request.url.path.startswith(f"/ex/jira/{CLOUD}/forms/issue/DEMO-7/form")
+               for request in calls)
+    assert all(request.headers["authorization"] == "Bearer access-test-only" for request in calls)
+    assert all(request.method == "GET" for request in calls)
+
+
+@pytest.mark.parametrize("status", [401, 403, 404, 429, 500, 302])
+def test_forms_refreshes_oauth_once_only_on_unauthorized(status):
+    grants, calls = [], []
+    def provider(request):
+        if request.url.host == "auth.atlassian.com":
+            grants.append(request)
+            return grant("access-" + str(len(grants)))
+        calls.append(request)
+        return httpx.Response(status, headers={"Location": "https://untrusted.example/forms"})
+    with httpx.Client(transport=httpx.MockTransport(provider), follow_redirects=True) as client:
+        response = Jira(oauth_settings(), client).forms_request("issue/DEMO-7/form")
+    assert response.status_code == status
+    assert len(grants) == len(calls) == (2 if status == 401 else 1)
+    assert all(str(r.url) == f"https://api.atlassian.com/ex/jira/{CLOUD}/forms/issue/DEMO-7/form" for r in calls)
+    assert all(r.method == "GET" for r in calls)
+
+
+def test_forms_scoped_bearer_token_uses_gateway_without_oauth_grant():
+    cfg = oauth_settings()
+    cfg.jira_client_id = cfg.jira_client_secret = ""
+    cfg.jira_token = "scoped-token-test-only"
+    calls = []
+    def provider(request):
+        calls.append(request)
+        return httpx.Response(200, json=[])
+    with httpx.Client(transport=httpx.MockTransport(provider)) as client:
+        assert Jira(cfg, client).forms("DEMO-7") == ([], [])
+    assert len(calls) == 1
+    assert str(calls[0].url) == f"https://api.atlassian.com/ex/jira/{CLOUD}/forms/issue/DEMO-7/form"
+    assert calls[0].headers["authorization"] == "Bearer scoped-token-test-only"
+
+
+def test_forms_outside_allowlist_does_not_contact_provider():
+    with httpx.Client(transport=httpx.MockTransport(lambda request: pytest.fail("must not call provider"))) as client:
+        with pytest.raises(RuleError, match="jira_project_not_allowed"):
+            Jira(oauth_settings(), client).forms("OTHER-7")
+
+
+def test_forms_not_ready_is_retryable():
+    def provider(request):
+        if request.url.host == "auth.atlassian.com":
+            return grant()
+        return httpx.Response(404)
+
+    with httpx.Client(transport=httpx.MockTransport(provider)) as client:
+        with pytest.raises(PreflightRetry) as exc:
+            Jira(oauth_settings(), client).forms("DEMO-7")
+    assert exc.value.delay == 5
 
 
 def test_actor_credential_key_stays_stable_across_access_token_refresh():
@@ -210,6 +291,24 @@ def test_live_runner_rejects_mixed_jira_credentials_from_env_file(configuration,
         '--allow-remote-writes', '--jira-project', 'KAN', '--jira-issue-type-id', '10003',
         '--jira-initial-status-id', '10000', '--jira-target-status-id', '10003', '--jira-link-type-id', '10000'])
     with pytest.raises(RuntimeError, match='not both'):
+        run(args)
+    assert not (tmp_path / 'evidence').exists()
+
+
+@pytest.mark.parametrize("allowed", [None, "DEMO"])
+def test_live_runner_requires_matching_allowlist_before_creating_resources(configuration, tmp_path, monkeypatch, allowed):
+    from tools.e2e_live import parse_args, run
+    for key, value in {"JIRA_CLIENT_ID": "client-test-only", "JIRA_CLIENT_SECRET": "secret-test-only",
+                       "JIRA_CLOUD_ID": CLOUD}.items():
+        configuration.setenv(key, value)
+    configuration.delenv("ALLOWED_JIRA_PROJECTS", raising=False)
+    if allowed is not None:
+        configuration.setenv("ALLOWED_JIRA_PROJECTS", allowed)
+    monkeypatch.setattr('tools.e2e_live.command', lambda *args, **kwargs: pytest.fail('must not create resources'))
+    args = parse_args(['--provider', 'jira', '--output', str(tmp_path / 'evidence'),
+        '--allow-remote-writes', '--jira-project', 'KAN', '--jira-issue-type-id', '10003',
+        '--jira-initial-status-id', '10000', '--jira-target-status-id', '10003', '--jira-link-type-id', '10000'])
+    with pytest.raises(RuntimeError, match='ALLOWED_JIRA_PROJECTS'):
         run(args)
     assert not (tmp_path / 'evidence').exists()
 

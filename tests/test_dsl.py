@@ -106,13 +106,13 @@ def test_literal_field_pipeline_example():
              "labels": ["automation-lab-repository"], "summary": "New repository",
              "repository.name": [{"value": "service-payments"}]}},
              'changelog': {'items': [{'field': 'status', 'toString': 'Done'}]}}
-    assert match(rule, "jira", "jira:issue_updated", event)["matched"]
-    body = render_action(rule.actions[0], event)
+    assert match(rule, "jira", "jira:issue_updated", {"payload": event})["matched"]
+    body = render_action(rule.actions[0], {"payload": event})
     assert {v["key"]: v["value"] for v in body["variables"]}["REPOSITORY_NAME"] == "service-payments"
     event["issue"]["fields"]["repository.name"] = []
-    assert not match(rule, "jira", "jira:issue_updated", event)["matched"]
+    assert not match(rule, "jira", "jira:issue_updated", {"payload": event})["matched"]
     with pytest.raises(RuleError):
-        render_action(rule.actions[0], event)
+        render_action(rule.actions[0], {"payload": event})
 
 
 @pytest.mark.parametrize("key,from_id,to_id,expected", [
@@ -126,17 +126,17 @@ def test_explicit_status_id_mapping(key, from_id, to_id, expected):
     payload = {"issue": {"key": key, "fields": {
         "project": {"key": "KAN"}, "labels": ["automation-lab-repository"]}},
         "changelog": {"items": [{"field": "status", "from": from_id, "to": to_id}]}}
-    assert match(rule, "jira", "jira:issue_updated", payload)["matched"] is expected
+    assert match(rule, "jira", "jira:issue_updated", {"payload": payload})["matched"] is expected
 
 
 def test_example():
     import json
     rule, digest = parse_rule(EXAMPLE)
     event = json.loads(Path("examples/jira-event.json").read_text())
-    assert match(rule, "jira", event["webhookEvent"], event)["matched"]
-    assert not match(rule, "test", event["webhookEvent"], event)["matched"]
+    assert match(rule, "jira", event["webhookEvent"], {"payload": event})["matched"]
+    assert not match(rule, "test", event["webhookEvent"], {"payload": event})["matched"]
     assert len(digest) == 64
-    body = render_action(rule.actions[0], event)
+    body = render_action(rule.actions[0], {"payload": event})
     assert len(body["variables"]) == 7
     assert body["variables"][-1]["value"] == "KAN-1"
 
@@ -184,5 +184,5 @@ def test_render_missing_never_interpolates_code():
     with pytest.raises(RuleError):
         render_action(rule.actions[0], {})
     value = "$(touch /tmp/never); {{ secrets.token }}"
-    body = render_action(rule.actions[0], {"issue": {"key": "DEMO-1", "fields": {"summary": value}}})
+    body = render_action(rule.actions[0], {"payload": {"issue": {"key": "DEMO-1", "fields": {"summary": value}}}})
     assert body["variables"][2]["value"] == value

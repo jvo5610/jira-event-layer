@@ -34,6 +34,7 @@ def required_permission(method, route):
     if route == "/v1/rules" and method == "POST":
         return "rules:write"
     if method == "POST" and route in {"/v1/rules/{name}/activate", "/v1/rules/{name}/disable",
-            "/v1/events", "/v1/events/{event_id}/execute", "/v1/runs/{run_id}/reconcile"}:
+            "/v1/events", "/v1/events/{event_id}/execute",
+            "/v1/events/{event_id}/enrichment/retry", "/v1/runs/{run_id}/reconcile"}:
         return "flows:operate"
     return "auth:admin"  # New mutation routes are administrator-only unless explicitly classified.

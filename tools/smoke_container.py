@@ -184,10 +184,10 @@ def main():
 kind: Rule
 name: literal-path-acceptance
 trigger: {source: jira, event: "jira:issue_updated"}
-when: {path: '["sample.data"][0].ok', op: eq, value: true}
+when: {path: 'payload["sample.data"][0].ok', op: eq, value: true}
 actions:
   - type: jira.issue.get
-    issue: {path: issue.key}
+    issue: {path: payload.issue.key}
 '''
                 pointer = text.replace('["sample.data"][0].ok', '/sample.data/0/ok')
                 response = client.post(admin_url + "/v1/rules", content=text, headers=auth)

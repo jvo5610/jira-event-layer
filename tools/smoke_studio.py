@@ -82,10 +82,10 @@ def run(args):
 kind: Rule
 name: unsafe-gui-draft
 trigger: {source: jira, event: 'jira:issue_updated'}
-when: {path: issue.key, op: exists}
+when: {path: payload.issue.key, op: exists}
 actions:
   - type: jira.issue.edit
-    issue: {path: issue.key}
+    issue: {path: payload.issue.key}
     fields: {summary: {value: 'Too broad'}}
 '''
                     yaml_headers = {'Content-Type': 'application/yaml'}

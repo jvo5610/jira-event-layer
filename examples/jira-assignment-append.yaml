@@ -7,11 +7,11 @@ trigger:
   event: jira:issue_updated
 when:
   all:
-    - path: issue.fields.project.key
+    - path: payload.issue.fields.project.key
       op: eq
       value: KAN
     - some:
-        path: changelog.items
+        path: payload.changelog.items
         where:
           all:
             - path: fieldId
@@ -29,6 +29,6 @@ when:
 actions:
   - type: jira.issue.edit
     issue:
-      path: issue.key
+      path: payload.issue.key
     append_description:
       value: Se asigno!

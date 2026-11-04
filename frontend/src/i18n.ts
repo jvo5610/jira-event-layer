@@ -67,12 +67,12 @@ export const messages: Record<string, [string, string]> = {
   "Dato seleccionado: se usará su valor al ejecutar, no el nombre de la ruta.": ["Dato seleccionado: se usará su valor al ejecutar, no el nombre de la ruta.", "Selected data: its value will be used at runtime, not the path name."],
   "Las referencias ${…} se reemplazan al ejecutar.": ["Las referencias ${…} se reemplazan al ejecutar.", "References ${…} are replaced at runtime."],
   "Valor JSON. Podés editarlo en las opciones avanzadas.": ["Valor JSON. Podés editarlo en las opciones avanzadas.", "JSON value. You can edit it in advanced options."],
-  "Debe resolver a una sola clave Jira. Para editar el padre, elegí issue.fields.parent.key. No admite búsquedas ni listas.": ["Debe resolver a una sola clave Jira. Para editar el padre, elegí issue.fields.parent.key. No admite búsquedas ni listas.", "Must resolve to one Jira key. To edit the parent, choose issue.fields.parent.key. Searches and lists are not supported."],
+  "Debe resolver a una sola clave Jira. Para editar el padre, elegí payload.issue.fields.parent.key. No admite búsquedas ni listas.": ["Debe resolver a una sola clave Jira. Para editar el padre, elegí payload.issue.fields.parent.key. No admite búsquedas ni listas.", "Must resolve to one Jira key. To edit the parent, choose payload.issue.fields.parent.key. Searches and lists are not supported."],
   "Si el dato no existe o no es una clave Jira, la acción falla sin editar otro ticket.": ["Si el dato no existe o no es una clave Jira, la acción falla sin editar otro ticket.", "If the data is missing or is not a Jira key, the action fails without editing another issue."],
   "Elegí el campo y cargá su nuevo valor. Reemplaza el contenido actual; no agrega texto al final.": ["Elegí el campo y cargá su nuevo valor. Reemplaza el contenido actual; no agrega texto al final.", "Choose a field and enter its new value. It replaces the current content; it does not append text."],
   "Elegí el campo que querés modificar…": ["Elegí el campo que querés modificar…", "Choose a field…"],
   "Sin coincidencias. Podés escribir una referencia en las opciones avanzadas.": ["Sin coincidencias. Podés escribir una referencia en las opciones avanzadas.", "No matches. You can enter a reference in advanced options."],
-  "Escribí una clave Jira o abrí { } y elegí el dato que contiene la clave. Por ejemplo issue.fields.parent.key edita el padre del ticket del evento.": ["Escribí una clave Jira o abrí { } y elegí el dato que contiene la clave. Por ejemplo issue.fields.parent.key edita el padre del ticket del evento.", "Enter a Jira key or open { } and choose the data containing the key. For example issue.fields.parent.key edits the event issue's parent."],
+  "Escribí una clave Jira o abrí { } y elegí el dato que contiene la clave. Por ejemplo payload.issue.fields.parent.key edita el padre del ticket del evento.": ["Escribí una clave Jira o abrí { } y elegí el dato que contiene la clave. Por ejemplo payload.issue.fields.parent.key edita el padre del ticket del evento.", "Enter a Jira key or open { } and choose the data containing the key. For example payload.issue.fields.parent.key edits the event issue's parent."],
   "Abrí { } junto al valor para elegir datos del evento o de pasos anteriores. Para mezclar texto y datos usá ${…}; las opciones técnicas están en Avanzadas.": ["Abrí { } junto al valor para elegir datos del evento o de pasos anteriores. Para mezclar texto y datos usá ${…}; las opciones técnicas están en Avanzadas.", "Open { } next to the value to choose event or previous-step data. Use ${…} to mix text and data; technical settings are in Advanced options."],
   "Ayuda de la acción": ["Ayuda de la acción", "Action help"],
   "Cómo usar esta acción": ["Cómo usar esta acción", "How to use this action"],
@@ -80,12 +80,12 @@ export const messages: Record<string, [string, string]> = {
   "Resultado de este paso": ["Resultado de este paso", "This step's result"],
   "Son campos posibles: algunos aparecen solo si hubo cambios. Crear o clonar devuelve la key, no todos los campos del ticket; agregá Consultar ticket para leerlos.": ["Son campos posibles: algunos aparecen solo si hubo cambios. Crear o clonar devuelve la key, no todos los campos del ticket; agregá Consultar ticket para leerlos.", "These are possible fields: some appear only when changes occur. Create or clone returns the key, not all issue fields; add Get issue to read them."],
   "Usar un resultado anterior": ["Usar un resultado anterior", "Use a previous result"],
-  "Este es el primer paso: todavía no hay resultados anteriores. Podés usar datos del evento, como issue.key.": ["Este es el primer paso: todavía no hay resultados anteriores. Podés usar datos del evento, como issue.key.", "This is the first step: no previous results are available yet. You can use event data such as issue.key."],
+  "Este es el primer paso: todavía no hay resultados anteriores. Podés usar datos del evento, como payload.issue.key.": ["Este es el primer paso: todavía no hay resultados anteriores. Podés usar datos del evento, como payload.issue.key.", "This is the first step: no previous results are available yet. You can use event data such as payload.issue.key."],
   "Elegí Datos y abrí { } para seleccionar un resultado de un paso anterior. Se conserva el tipo original del valor.": ["Elegí Datos y abrí { } para seleccionar un resultado de un paso anterior. Se conserva el tipo original del valor.", "Choose Data and open { } to select a previous step's result. The value retains its original type."],
   "Ticket del paso {step}": ["Ticket del paso {step}", "Issue from step {step}"],
   "Resumen consultado en el paso {step}": ["Resumen consultado en el paso {step}", "Summary fetched in step {step}"],
   "Para mezclar texto y datos, elegí Plantilla. Por ejemplo:": ["Para mezclar texto y datos, elegí Plantilla. Por ejemplo:", "To combine text and data, choose Template. For example:"],
-  "Paso 1 corresponde a _steps[\"0\"], paso 2 a _steps[\"1\"]. issue.fields siempre lee el evento original, no los cambios de una acción anterior.": ["Paso 1 corresponde a _steps[\"0\"], paso 2 a _steps[\"1\"]. issue.fields siempre lee el evento original, no los cambios de una acción anterior.", "Step 1 is _steps[\"0\"], step 2 is _steps[\"1\"]. issue.fields always reads the original event, not changes from a previous action."],
+  "Paso 1 corresponde a _steps[\"0\"], paso 2 a _steps[\"1\"]. payload.issue.fields siempre lee el evento original, no los cambios de una acción anterior.": ["Paso 1 corresponde a _steps[\"0\"], paso 2 a _steps[\"1\"]. payload.issue.fields siempre lee el evento original, no los cambios de una acción anterior.", "Step 1 is _steps[\"0\"], step 2 is _steps[\"1\"]. payload.issue.fields always reads the original event, not changes from a previous action."],
   "La descripción de Jira puede ser un objeto ADF, no texto. No la concatènes en una plantilla: eso no conserva su formato ni agrega un párrafo.": ["La descripción de Jira puede ser un objeto ADF, no texto. No la concatenes en una plantilla: eso no conserva su formato ni agrega un párrafo.", "Jira descriptions may be ADF objects, not text. Do not concatenate them in a template: that does not preserve formatting or append a paragraph."],
   "Accesos": ["Accesos", "Access"],
   "Administración de accesos": ["Administración de accesos", "Access management"],
@@ -293,10 +293,10 @@ export const messages: Record<string, [string, string]> = {
     "recent events.",
   ],
   "Desactivar escenario": ["Desactivar regla", "Disable rule"],
-  "El evento avanza solo cuando se cumple este filtro. Las rutas se evalúan sobre el payload original.":
+  "El evento avanza solo cuando se cumple este filtro. Las rutas coinciden con el JSON del evento devuelto por la API.":
     [
-      "La regla se ejecuta cuando el evento cumple estas condiciones.",
-      "The rule runs when the event meets these conditions.",
+      "La regla se ejecuta cuando el evento cumple estas condiciones. Usá las mismas rutas que muestra el JSON del evento.",
+      "The rule runs when the event meets these conditions. Use the same paths shown in the event JSON.",
     ],
   "Todos los módulos ejecutables del contrato automation/v1. Sin routers o conexiones que el motor no soporte.":
     [
@@ -431,6 +431,7 @@ export const messages: Record<string, [string, string]> = {
   "Información del backend": ["Información de la API", "API information"],
   "Cerrar detalle": ["Cerrar detalle", "Close details"],
   "Detalle del evento": ["Detalle del evento", "Event details"],
+  "Diagnóstico del evento": ["Diagnóstico del evento", "Event diagnostics"],
   "Detalle de la ejecución": ["Detalle de la ejecución", "Run details"],
   "El payload fue eliminado por retención y no puede ejecutarse.": [
     "El contenido del evento ya no está disponible por la política de retención.",
