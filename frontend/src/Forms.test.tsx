@@ -5,34 +5,34 @@ import { setLanguage } from "./i18n";
 
 afterEach(() => setLanguage("es"));
 const render = (overrides: Partial<Suggestion> = {}) => renderToStaticMarkup(
-  <SuggestionDetails suggestion={{path: "issue.fields.status.name", types: ["null", "string"], ...overrides}} />,
+  <SuggestionDetails suggestion={{path: "payload.issue.fields.status.name", types: ["null", "string"], ...overrides}} />,
 );
 describe("Observed field examples", () => {
   it("offers an explicit append description operation without an empty fields requirement in the UI", () => {
-    const html=renderToStaticMarkup(<ActionEditor action={{type:'jira.issue.edit',issue:{path:'issue.key'},fields:{},append_description:{value:'Se asigno!'}}}
+    const html=renderToStaticMarkup(<ActionEditor action={{type:'jira.issue.edit',issue:{path:'payload.issue.key'},fields:{},append_description:{value:'Se asigno!'}}}
       definition={{properties:{issue:{},fields:{},append_description:{}},required:['issue']}} suggestions={[]} onChange={()=>{}} />);
     expect(html).toContain('Agregar al final de la descripción');
     expect(html).toContain('Se asigno!');
     expect(html).toContain('sin reemplazar el contenido');
   });
   it("suggests issue-key values, not observed dates, status names or structured outputs as edit targets", () => {
-    expect(isIssueTargetSuggestion({path:'issue.fields.parent.key',types:['null']})).toBe(true);
-    expect(isIssueTargetSuggestion({path:'issue.fields.customfield_10090',types:['string'],example_state:'present',example_kind:'value',example:'OPS-42'})).toBe(true);
+    expect(isIssueTargetSuggestion({path:'payload.issue.fields.parent.key',types:['null']})).toBe(true);
+    expect(isIssueTargetSuggestion({path:'payload.issue.fields.customfield_10090',types:['string'],example_state:'present',example_kind:'value',example:'OPS-42'})).toBe(true);
     for (const example of ['Done','2026-10-15',false,123])
-      expect(isIssueTargetSuggestion({path:'issue.fields.x',types:['string'],example_state:'present',example_kind:'value',example})).toBe(false);
+      expect(isIssueTargetSuggestion({path:'payload.issue.fields.x',types:['string'],example_state:'present',example_kind:'value',example})).toBe(false);
     expect(isIssueTargetSuggestion({path:'_steps["0"].fields',types:[],availability:'declared'})).toBe(false);
     expect(isIssueTargetSuggestion({path:'_steps["0"].key',types:[],availability:'declared'})).toBe(true);
   });
   it("uses one issue input and a data picker instead of requiring a binding mode", () => {
-    const html = renderToStaticMarkup(<SingleValueEditor label="Ticket a editar" target value={{path:'issue.fields.parent.key'}} suggestions={[]} onChange={() => {}} />);
+    const html = renderToStaticMarkup(<SingleValueEditor label="Ticket a editar" target value={{path:'payload.issue.fields.parent.key'}} suggestions={[]} onChange={() => {}} />);
     expect(html).toContain('aria-label="Ticket a editar"');
-    expect(html).toContain('issue.fields.parent.key');
+    expect(html).toContain('payload.issue.fields.parent.key');
     expect(html.toLowerCase()).toContain('readonly');
     expect(html).toContain('Elegir dato para Ticket a editar');
     expect(html).toContain('Quitar dato seleccionado');
     expect(html).not.toContain('class="segmented"');
     expect(enteredBinding('OPS-42')).toEqual({value:'OPS-42'});
-    expect(enteredBinding('${issue.fields.parent.key}')).toEqual({template:'${issue.fields.parent.key}'});
+    expect(enteredBinding('${payload.issue.fields.parent.key}')).toEqual({template:'${payload.issue.fields.parent.key}'});
   });
   it("adds Jira fields through a select and immediately shows their value editor", () => {
     const html = renderToStaticMarkup(<ActionEditor action={{type:'jira.issue.edit',issue:{value:'KAN-45'},fields:{description:{value:'New text'}}}}
@@ -53,7 +53,7 @@ describe("Observed field examples", () => {
       const example = value === "En curso" ? "&quot;En curso&quot;" : String(value);
       expect(html).toContain(`Ejemplo: ${example}`);
       expect(html).toContain("null · string");
-      expect(html).toContain("issue.fields.status.name");
+      expect(html).toContain("payload.issue.fields.status.name");
       expect(html).not.toContain("Texto · puede venir vacío");
     }
   });
@@ -70,16 +70,16 @@ describe("Observed field examples", () => {
     expect(render({example_state:"empty"})).toContain("No data in the sample");
   });
   it("does not relabel or translate data paths and searches only raw keys", () => {
-    const suggestion: Suggestion = {path:"issue.fields.duedate",types:["null","string"],example_state:"present",example_kind:"value",example:"2026-10-23"};
+    const suggestion: Suggestion = {path:"payload.issue.fields.duedate",types:["null","string"],example_state:"present",example_kind:"value",example:"2026-10-23"};
     const spanish = renderToStaticMarkup(<SuggestionDetails suggestion={suggestion} />);
     setLanguage("en");
     const english = renderToStaticMarkup(<SuggestionDetails suggestion={suggestion} />);
     for (const html of [spanish, english]) {
-      expect(html).toContain("issue.fields.duedate");
+      expect(html).toContain("payload.issue.fields.duedate");
       expect(html).toContain("null · string");
       expect(html).not.toContain("Fecha de vencimiento");
       expect(html).not.toContain("Due date");
-      expect(html.match(/issue.fields.duedate/g)).toHaveLength(1);
+      expect(html.match(/payload.issue.fields.duedate/g)).toHaveLength(1);
     }
     expect(filterSuggestions([suggestion], "DUEDATE")).toEqual([suggestion]);
     expect(filterSuggestions([suggestion], "Fecha de vencimiento")).toEqual([]);

@@ -101,6 +101,32 @@ def test_checksum_mismatch_rejected_before_pending_sql(database, release):
         assert conn.execute("SELECT count(*) AS n FROM schema_migrations").fetchone()["n"] == 1
 
 
+def test_forms_migration_preserves_existing_events_and_is_repeatable(database, tmp_path, monkeypatch):
+    source = migration.MIGRATIONS
+    for script in sorted(source.glob("*.sql")):
+        if script.name < "006_event_enrichment.sql":
+            (tmp_path / script.name).write_bytes(script.read_bytes())
+    monkeypatch.setattr(migration, "MIGRATIONS", tmp_path)
+    migration.migrate(database, "forms-upgrade")
+    identifier = uuid.uuid4()
+    with connect(database) as conn:
+        conn.execute("""INSERT INTO events(id,tenant,source,delivery_id,event_type,payload,raw_body,sha256)
+            VALUES(%s,'forms-upgrade','jira','existing-event','comment_created',%s::jsonb,%s,%s)""",
+            (identifier, '{"issue":{"key":"DEMO-1"}}', b'original-event', 'a' * 64))
+    (tmp_path / "006_event_enrichment.sql").write_bytes((source / "006_event_enrichment.sql").read_bytes())
+    assert migration.status(database, "forms-upgrade")[-1]["status"] == "pending"
+    migration.migrate(database, "forms-upgrade")
+    migration.migrate(database, "forms-upgrade")
+    with connect(database) as conn:
+        event = conn.execute("SELECT * FROM events WHERE id=%s", (identifier,)).fetchone()
+        assert event["payload"] == {"issue": {"key": "DEMO-1"}}
+        assert event["raw_body"] == b'original-event'
+        assert event["enrichment_status"] == "not_required"
+        assert event["enrichment_attempts"] == 0 and event["enrichment"] is None
+        assert conn.execute("SELECT count(*) AS n FROM schema_migrations").fetchone()["n"] == 6
+        migration.check_schema(conn, "forms-upgrade")
+
+
 def test_history_gap_rejected_before_pending_sql(database, release):
     (release / "002_middle.sql").write_text("SELECT 1;")
     (release / "003_last.sql").write_text("SELECT 1;")

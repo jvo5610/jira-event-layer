@@ -1,7 +1,7 @@
 # Referencia técnica de Jira Relay
 
 Complementa el [README](../README.md) con contratos de ejecución, acciones, datos y diagnóstico.
-La [guía de Studio](studio.md) cubre la interfaz. Todo corresponde al código de este checkout;
+La [guía de Studio](https://github.com/jvo5610/jira-event-layer/blob/7fb58f5ccbb81b299b2ef5e9e415775c4a45012a/docs/studio.md) cubre la interfaz. Todo corresponde al código de este checkout;
 no depende de un despliegue o una cuenta particular.
 
 ## Mapa del código y fuentes de verdad
@@ -89,11 +89,13 @@ yaml_text = Path("examples/jira-assignment-append.yaml").read_text()
 validated = call("POST", "/v1/rules/validate", yaml_text, yaml_body=True)
 evaluation = call("POST", "/v1/evaluate", {
     "yaml": yaml_text,
-    "source": "jira",
-    "event_type": "jira:issue_updated",
-    "payload": {
-        "issue": {"key": "KAN-123", "fields": {"project": {"key": "KAN"}}},
-        "changelog": {"items": [{"fieldId": "assignee", "to": "example-account"}]},
+    "event": {
+        "source": "jira",
+        "event_type": "jira:issue_updated",
+        "payload": {
+            "issue": {"key": "KAN-123", "fields": {"project": {"key": "KAN"}}},
+            "changelog": {"items": [{"fieldId": "assignee", "to": "example-account"}]},
+        },
     },
 })
 assert validated["valid"] is True
@@ -125,6 +127,13 @@ evalúa las versiones actualmente activas; no duplica un run del mismo evento/re
 pero una versión nueva puede producir nuevos efectos. No usar replay como reintento de una
 escritura ambigua. Eventos excluidos o redactados no se pueden ejecutar.
 
+Los eventos Jira `filter_*` se descartan al ingreso, tanto por webhook firmado
+como por ingesta autenticada. Se responde `202`, con `event_id:null`,
+`ignored_reason:ignored_event_type` y `persisted:false`, sin guardar el payload
+ni evaluar reglas. Se registra solamente el descarte y la huella del identificador
+de entrega. No se elimina el histórico. `issue_property_set`, `issuelink_created`
+e `issuelink_deleted` se conservan y mantienen la protección por actor desconocido.
+
 ## Acciones: entradas y resultados
 
 Los nombres son los discriminadores YAML exactos. `fields` es un mapa de bindings de valores;
@@ -143,7 +152,7 @@ Los IDs de tipo, estado y vínculo son cadenas de dígitos, no sus nombres visib
 | `bitbucket.pipeline` | `workspace`, `repository`, `pipeline`; `branch` por defecto `master`; opcional `variables`. | Al completar: `state: COMPLETED`, `result: SUCCESSFUL`. El UUID remoto está en el run. |
 
 Un `get.require` falso **termina la secuencia sin error** y sin ejecutar los pasos restantes;
-no crea un `else`. Su filtro parte de `fields.status.id`, no de `issue.fields.status.id`.
+no crea un `else`. Su filtro parte de `fields.status.id`, no de `payload.issue.fields.status.id`.
 Create/clone no devuelven un ticket completo: para leer el nuevo ticket, agregar un get con
 `issue: {path: '_steps["0"].key'}`. Clone no copia comentarios, adjuntos, vínculos ni historial.
 
@@ -181,22 +190,37 @@ son mayúsculas/dígitos/guion bajo y no pueden usarse para pasar secretos. El c
 
 ## Contexto y bindings
 
-`when` lee el evento original. `some.where` lee cada elemento de su lista. `get.require` lee
+`when` lee exactamente el documento de `GET /v1/events/{id}`. El webhook original
+está en `payload` y los formularios normalizados están en `enrichment.forms`.
+No hay alias `_relay` ni eliminación implícita del prefijo `payload`.
+`POST /v1/evaluate` acepta `{"yaml": "...", "event": documento}` o
+`{"yaml": "...", "event_ids": ["..."]}`: ambos usan las mismas rutas y tipos.
+El listado `/v1/events` es un resumen; sus campos `issue_key`, `issue_type` e
+`issue_summary` no son rutas del documento del evento.
+
+`some.where` lee cada elemento de su lista. `get.require` lee
 el ticket consultado. Las entradas de acciones leen el evento más `_steps`, un objeto construido
 por el worker desde resultados durables anteriores **de ese mismo run**. Un webhook no puede
 inyectarlo y los pasos futuros no están disponibles.
 
+`GET /v1/events/{id}/diagnostics` devuelve `event_id`, `execution_blocked_reason`
+y `evaluations`. Son diagnóstico del procesamiento, no datos agregados al evento
+ni campos para disparar reglas. Los timestamps y estados operativos del evento
+reflejan el momento de la consulta; las acciones no modifican el snapshot de Jira.
+El catálogo y el contexto histórico del editor muestran ejemplos acotados y
+protegen datos sensibles; no reemplazan el documento completo del evento.
+
 El paso visible 1 ocupa la clave `"0"`: `_steps["0"].key`. No usar `_steps[0]` (eso exige una
 lista), `_steps["0"].issue.key` (el resultado no tiene wrapper `issue`) ni asumir que una edición
-actualiza `issue.fields`: ese snapshot permanece como llegó en el evento.
+actualiza `payload.issue.fields`: ese snapshot permanece como llegó en el evento.
 
 | Forma | Semántica |
 | --- | --- |
 | `"texto"` o `{value: "texto"}` | Literal; la forma explícita no interpola `${...}`. |
-| `{path: issue.key}` | Referencia a un valor. |
-| `'${issue.fields.labels}'` | Referencia completa; preserva el tipo JSON en campos que lo admiten. |
-| `'Ticket ${issue.key}'` | Interpolación de escalares no nulos dentro de texto. |
-| `'$${issue.key}'` | Texto literal `${issue.key}`. |
+| `{path: payload.issue.key}` | Referencia a un valor. |
+| `'${payload.issue.fields.labels}'` | Referencia completa; preserva el tipo JSON en campos que lo admiten. |
+| `'Ticket ${payload.issue.key}'` | Interpolación de escalares no nulos dentro de texto. |
+| `'$${payload.issue.key}'` | Texto literal `${payload.issue.key}`. |
 | `{value: {accountId: "..."}}` | Objeto literal; el wrapper evita confundirlo con un binding. |
 
 `default` existe en bindings de texto `{path: ..., default: "..."}`, no en los valores JSON de
@@ -357,5 +381,5 @@ uv run --frozen python tools/smoke_studio.py \
 
 Esto prueba GUI/gateway/API/DB y administración de credenciales sin llamar a Jira/Bitbucket.
 La prueba opt-in `tools/e2e_live.py` sí escribe recursos remotos autorizados, conserva evidencia
-privada y no sustituye un webhook nativo. La [CI](../.github/workflows/ci.yml) ejecuta los checks
+privada y no sustituye un webhook nativo. La [CI](https://github.com/jvo5610/jira-event-layer/blob/7fb58f5ccbb81b299b2ef5e9e415775c4a45012a/.github/workflows/ci.yml) ejecuta los checks
 reproducibles; no despliega ni verifica credenciales de una instalación particular.

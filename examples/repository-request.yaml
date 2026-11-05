@@ -7,14 +7,14 @@ trigger:
   event: jira:issue_updated
 when:
   all:
-    - path: issue.fields.project.key
+    - path: payload.issue.fields.project.key
       op: eq
       value: KAN
-    - path: issue.fields.labels
+    - path: payload.issue.fields.labels
       op: contains
       value: automation-lab-repository
     - some:
-        path: changelog.items
+        path: payload.changelog.items
         where:
           all:
             - {path: field, op: eq, value: status}
@@ -28,9 +28,9 @@ actions:
     pipeline: setup-new-repository
     variables:
       PROJECT_KEY: KAN
-      REPOSITORY_NAME: "${issue.key}"
-      DESCRIPTION: "${issue.fields.summary}"
+      REPOSITORY_NAME: "${payload.issue.key}"
+      DESCRIPTION: "${payload.issue.fields.summary}"
       LANGUAGE: python
       DEFAULT_REVIEWERS: ""
       AWS_ACCOUNT_ID: ""
-      JIRA_ISSUE_KEY: "${issue.key}"
+      JIRA_ISSUE_KEY: "${payload.issue.key}"

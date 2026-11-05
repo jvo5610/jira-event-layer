@@ -17,6 +17,7 @@ class StoreStub:
 def test_unknown_mutation_is_not_implicitly_delegated():
     assert required_permission("POST", "/v1/future-dangerous-operation") == "auth:admin"
     assert required_permission("GET", "/v1/auth/tokens") == "auth:admin"
+    assert required_permission("POST", "/v1/events/{event_id}/enrichment/retry") == "flows:operate"
 
 
 @pytest.mark.parametrize("header", ["", "Basic anything", "Bearer wrong", "Bearer ", "Bearer " + "t" * 40 + " extra"])

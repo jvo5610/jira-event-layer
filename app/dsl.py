@@ -107,7 +107,7 @@ def template_parts(text):
 
 
 class TemplateBinding(Strict):
-    template: str = Field(max_length=4096, description="${path} preserves the referenced JSON type; embedded references produce text. $${ escapes a literal ${. Missing fields fail. No expressions or recursive interpolation.", examples=['${issue.key}', 'Ticket ${issue.key}', '${issue.fields["some.value"]}'])
+    template: str = Field(max_length=4096, description="${path} preserves the referenced JSON type; embedded references produce text. $${ escapes a literal ${. Missing fields fail. No expressions or recursive interpolation.", examples=['${payload.issue.key}', 'Ticket ${payload.issue.key}', '${payload.issue.fields["some.value"]}'])
 
     @model_validator(mode="after")
     def valid(self):
@@ -276,8 +276,8 @@ class Rule(Strict):
     description: str = Field(default="", max_length=2000)
     trigger: Trigger
     when: dict = Field(description="Filter over the triggering event; some.where uses the current list item. " + PATH_DESCRIPTION,
-                       examples=[{"path": "issue.fields.project.key", "op": "eq", "value": "DEMO"},
-                                 {"some": {"path": "changelog.items", "where": {"path": "field", "op": "eq", "value": "status"}}}],
+                       examples=[{"path": "payload.issue.fields.project.key", "op": "eq", "value": "DEMO"},
+                                 {"some": {"path": "payload.changelog.items", "where": {"path": "field", "op": "eq", "value": "status"}}}],
                        json_schema_extra={"x-path-syntax": PATH_SYNTAX})
     actions: list[RuleAction] = Field(min_length=1, max_length=10)
 

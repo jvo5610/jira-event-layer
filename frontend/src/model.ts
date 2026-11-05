@@ -62,7 +62,7 @@ export function newRule(): Rule {
     name: "nuevo-flujo",
     description: "",
     trigger: { source: "jira", event: "jira:issue_updated" },
-    when: { path: "issue.key", op: "exists" },
+    when: { path: "payload.issue.key", op: "exists" },
     actions: [],
   };
 }
@@ -99,7 +99,7 @@ export function initialAction(definition: Obj): Obj {
     else if (key === "fields" || key === "variables") action[key] = {};
     else if (key === "copy_fields") action[key] = ["summary", "description"];
     else if (definition.required?.includes(key))
-      action[key] = field.type === "string" ? "" : { path: "issue.key" };
+      action[key] = field.type === "string" ? "" : { path: "payload.issue.key" };
   }
   return action;
 }

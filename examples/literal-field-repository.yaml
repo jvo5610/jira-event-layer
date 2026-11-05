@@ -6,12 +6,12 @@ description: Extract a literal key and array element into a NO-OP pipeline input
 trigger: {source: jira, event: "jira:issue_updated"}
 when:
   all:
-    - {path: issue.fields.project.key, op: eq, value: KAN}
-    - {path: issue.fields.labels, op: contains, value: automation-lab-repository}
-    - path: 'issue.fields["repository.name"][0].value'
+    - {path: payload.issue.fields.project.key, op: eq, value: KAN}
+    - {path: payload.issue.fields.labels, op: contains, value: automation-lab-repository}
+    - path: 'payload.issue.fields["repository.name"][0].value'
       op: exists
     - some:
-        path: changelog.items
+        path: payload.changelog.items
         where:
           all:
             - {path: field, op: eq, value: status}
@@ -24,9 +24,9 @@ actions:
     pipeline: setup-new-repository
     variables:
       PROJECT_KEY: KAN
-      REPOSITORY_NAME: '${issue.fields["repository.name"][0].value}'
-      DESCRIPTION: "${issue.fields.summary}"
+      REPOSITORY_NAME: '${payload.issue.fields["repository.name"][0].value}'
+      DESCRIPTION: "${payload.issue.fields.summary}"
       LANGUAGE: python
       DEFAULT_REVIEWERS: ""
       AWS_ACCOUNT_ID: ""
-      JIRA_ISSUE_KEY: "${issue.key}"
+      JIRA_ISSUE_KEY: "${payload.issue.key}"

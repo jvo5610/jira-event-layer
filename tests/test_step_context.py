@@ -14,7 +14,7 @@ def test_pipeline_receives_durable_prior_results_not_webhook_injection(env):
 kind: Rule
 name: pipeline-step-context
 trigger: {source: jira, event: 'jira:issue_updated'}
-when: {path: issue.key, op: exists}
+when: {path: payload.issue.key, op: exists}
 actions:
   - type: bitbucket.pipeline
     workspace: jvidelaolmos
@@ -72,8 +72,8 @@ def test_step_context_is_scoped_and_excludes_future_failed_or_untrusted_results(
 def test_pipeline_dispatch_uses_the_same_trusted_context_without_infrastructure():
     spec = {'apiVersion': 'automation/v1', 'kind': 'Rule', 'name': 'step-context-unit',
             'trigger': {'source': 'jira', 'event': 'jira:issue_updated'},
-            'when': {'path': 'issue.key', 'op': 'exists'},
-            'actions': [{'type': 'jira.issue.get', 'issue': '${issue.key}'},
+            'when': {'path': 'payload.issue.key', 'op': 'exists'},
+            'actions': [{'type': 'jira.issue.get', 'issue': '${payload.issue.key}'},
                         {'type': 'bitbucket.pipeline', 'workspace': 'jvidelaolmos',
                          'repository': 'jira-event-layer-lab', 'branch': 'main',
                          'pipeline': 'setup-new-repository',
@@ -82,7 +82,9 @@ def test_pipeline_dispatch_uses_the_same_trusted_context_without_infrastructure(
     class Store:
         def query(self, sql, args):
             if 'SELECT v.spec' in sql:
-                return [{'spec': spec, 'payload': {'issue': {'key': 'KAN-10'}, '_steps': {'0': {'key': 'FORGED-1'}}}}]
+                return [{'spec': spec, 'payload': {'issue': {'key': 'KAN-10'},
+                                                   '_steps': {'0': {'key': 'FORGED-1'}}},
+                         'enrichment': None}]
             assert args == ('run-1', 1)
             return [{'step': 0, 'detail': {'result': {'key': 'KAN-13'}}}]
         def exclude_event(self, event_id):
@@ -94,6 +96,7 @@ def test_pipeline_dispatch_uses_the_same_trusted_context_without_infrastructure(
     worker = Worker.__new__(Worker)
     worker.store = Store()
     worker.settings = SimpleNamespace()
+    worker.tick_enrichment = lambda: False
     worker.claim = lambda: {'id': 'run-1', 'event_id': 'event-1', 'rule_name': 'step-context-unit', 'version': 1, 'step': 1, 'status': 'pending', 'attempts': 1}
     worker.connector = SimpleNamespace(call=dispatch)
     worker.reserve_bitbucket_write = lambda run: None

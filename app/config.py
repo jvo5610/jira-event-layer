@@ -122,6 +122,17 @@ def jira_configured(settings):
                 (getattr(settings, "jira_client_id", "") and getattr(settings, "jira_client_secret", "")))
 
 
+def allowed_jira_projects_from_env(*, required=False):
+    raw = os.getenv("ALLOWED_JIRA_PROJECTS")
+    if (raw is None or not raw.strip()) and not required:
+        return frozenset()
+    projects = [key.strip() for key in (raw or "").split(",")]
+    if (len(raw or "") > 4096 or len(projects) > 100
+            or any(not re.fullmatch(r"[A-Z][A-Z0-9_]{1,30}", key) for key in projects)):
+        raise RuntimeError("ALLOWED_JIRA_PROJECTS requires 1-100 comma-separated Jira project keys")
+    return frozenset(projects)
+
+
 def jira_credentials_from_env():
     """One auth contract shared by services and the opt-in live runner."""
     load_environment()
@@ -154,8 +165,10 @@ class Settings:
     jira_client_id: str = field(default="", repr=False)
     jira_client_secret: str = field(default="", repr=False)
     jira_max_daily_writes: int = 100
+    jira_forms_empty_retries: int = 10
     bitbucket_max_daily_writes: int = 100
     auth_rotation_ttl: int = 3600
+    allowed_jira_projects: frozenset[str] = field(default_factory=frozenset)
 
     @classmethod
     def from_env(cls, mode="api"):
@@ -178,6 +191,8 @@ class Settings:
         settings.max_body = integer("MAX_BODY_BYTES", 10485760, 1024, 10485760)
         for name, value in jira_credentials_from_env().items():
             setattr(settings, name, value)
+        settings.allowed_jira_projects = allowed_jira_projects_from_env(required=jira_configured(settings))
         settings.jira_max_daily_writes = integer("JIRA_MAX_DAILY_WRITES", 100, 1, 100000)
+        settings.jira_forms_empty_retries = integer("JIRA_FORMS_EMPTY_RETRIES", 10, 1, 100)
         settings.bitbucket_max_daily_writes = integer("BITBUCKET_MAX_DAILY_WRITES", 100, 1, 100000)
         return settings

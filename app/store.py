@@ -7,6 +7,8 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from app.dsl import Rule, RuleError, match
+from app.event_context import event_document
+from app.form_enrichment import candidate
 from app.safety import validate_safety
 from app.migrate import check_schema
 from app.config import database_options
@@ -62,7 +64,12 @@ class Store:
 
     @staticmethod
     def mark_excluded(conn, event, reason):
-        conn.execute("UPDATE events SET last_error=%s,processed_at=coalesce(processed_at,now()),attempts=greatest(attempts,1) WHERE id=%s", (reason, event['id']))
+        conn.execute("""UPDATE events SET last_error=%s,processed_at=coalesce(processed_at,now()),
+            attempts=greatest(attempts,1),
+            enrichment_status=CASE WHEN enrichment_status IN ('pending','enriching') THEN 'failed' ELSE enrichment_status END,
+            enrichment_error=CASE WHEN enrichment_status IN ('pending','enriching') THEN %s ELSE enrichment_error END,
+            enrichment_lease_until=NULL,enrichment_lease_token=NULL
+            WHERE id=%s""", (reason, reason, event['id']))
         cancelled = conn.execute("UPDATE runs SET status='failed',last_error=%s,updated_at=now(),lease_until=NULL,lease_token=NULL WHERE event_id=%s AND status='pending' RETURNING id,step", (reason, event['id'])).fetchall()
         for run in cancelled:
             conn.execute("INSERT INTO run_log(run_id,step,status,detail) VALUES(%s,%s,'failed',%s)", (run['id'], run['step'], Jsonb({'error': reason})))
@@ -75,6 +82,8 @@ class Store:
             reason = exclusion_reason(conn, event)
             if reason:
                 self.mark_excluded(conn, event, reason)
+                if event["enrichment_status"] in {"pending", "enriching"}:
+                    event["enrichment_status"] = "failed"
             return reason
 
     def save_rule(self, rule, digest, text):
@@ -127,7 +136,7 @@ class Store:
             try:
                 rule = Rule.model_validate(version['spec'])
                 validate_safety(rule)
-                trace = match(rule, event["source"], event["event_type"], event["payload"])
+                trace = match(rule, event["source"], event["event_type"], event_document(event))
             except RuleError as exc:
                 trace = {"matched": False, "error": str(exc)}
             inserted = conn.execute("INSERT INTO evaluations(event_id,rule_name,version,matched,trace) VALUES(%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING RETURNING matched",
@@ -138,10 +147,22 @@ class Store:
         conn.execute("UPDATE events SET processed_at=now(), attempts=attempts+1 WHERE id=%s", (event["id"],))
 
     def ingest(self, tenant, source, delivery_id, event_type, payload, raw):
+        from app.observability import fingerprint, log_event
+        if source == "jira" and event_type.rsplit(":", 1)[-1].startswith("filter_"):
+            log_event("event_ignored", source=source, reason="ignored_event_type",
+                      delivery_id_sha256=fingerprint(delivery_id))
+            return {"event_id": None, "duplicate": False, "runs": [],
+                    "ignored_reason": "ignored_event_type", "persisted": False,
+                    "enrichment_status": "not_required"}
         digest = hashlib.sha256(raw).hexdigest()
+        enrichment_status = "pending" if candidate(source, event_type, payload) else "not_required"
         with self.pool.connection() as conn:
-            event = conn.execute("INSERT INTO events(id,tenant,source,delivery_id,event_type,payload,raw_body,sha256) VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING RETURNING *",
-                                 (uuid.uuid4(), tenant, source, delivery_id, event_type, Jsonb(payload), raw, digest)).fetchone()
+            event = conn.execute("""INSERT INTO events(
+                id,tenant,source,delivery_id,event_type,payload,raw_body,sha256,enrichment_status)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT DO NOTHING RETURNING *""",
+                (uuid.uuid4(), tenant, source, delivery_id, event_type, Jsonb(payload), raw, digest,
+                 enrichment_status)).fetchone()
             duplicate = event is None
             if duplicate:
                 event = conn.execute("SELECT * FROM events WHERE tenant=%s AND source=%s AND delivery_id=%s", (tenant, source, delivery_id)).fetchone()
@@ -150,10 +171,99 @@ class Store:
             reason = exclusion_reason(conn, event)
             if reason:
                 self.mark_excluded(conn, event, reason)
-            elif not duplicate:
+                if event["enrichment_status"] in {"pending", "enriching"}:
+                    event["enrichment_status"] = "failed"
+            elif not duplicate and event["enrichment_status"] == "not_required":
                 self.fanout(conn, event)
             runs = conn.execute("SELECT id,status,rule_name,version FROM runs WHERE event_id=%s", (event["id"],)).fetchall()
-            return {"event_id": event["id"], "duplicate": duplicate, "runs": runs, 'ignored_reason': reason}
+            result = {"event_id": event["id"], "duplicate": duplicate, "runs": runs,
+                      "ignored_reason": reason, "enrichment_status": event["enrichment_status"]}
+        log_event("event_ingested", event_id=event["id"], source=source if source in {"jira", "test"} else "other",
+                  delivery_id_sha256=fingerprint(delivery_id), duplicate=duplicate,
+                  runs_count=len(runs), ignored_reason=reason,
+                  enrichment_status=event["enrichment_status"])
+        return result
+
+    def claim_enrichment(self):
+        with self.pool.connection() as conn:
+            conn.execute("""UPDATE events SET enrichment_status='pending',
+                enrichment_error='enrichment_lease_expired',enrichment_lease_until=NULL,
+                enrichment_lease_token=NULL,enrichment_next_at=now()
+                WHERE enrichment_status='enriching' AND enrichment_lease_until<now()""")
+            event = conn.execute("""SELECT * FROM events
+                WHERE enrichment_status='pending' AND enrichment_next_at<=now()
+                ORDER BY enrichment_next_at,received_at
+                FOR UPDATE SKIP LOCKED LIMIT 1""").fetchone()
+            if not event:
+                return None
+            token = uuid.uuid4()
+            updated = conn.execute("""UPDATE events SET enrichment_status='enriching',
+                enrichment_attempts=enrichment_attempts+1,
+                enrichment_lease_until=now()+interval '120 seconds',
+                enrichment_lease_token=%s,enrichment_error=NULL
+                WHERE id=%s RETURNING *""", (token, event["id"])).fetchone()
+            return updated
+
+    def retry_enrichment(self, event, error, delay):
+        with self.pool.connection() as conn:
+            return conn.execute("""UPDATE events SET enrichment_status='pending',
+                enrichment_error=%s,enrichment_next_at=now()+%s*interval '1 second',
+                enrichment_lease_until=NULL,enrichment_lease_token=NULL
+                WHERE id=%s AND enrichment_status='enriching'
+                  AND enrichment_lease_token=%s AND enrichment_lease_until>now()
+                RETURNING id""", (error, delay, event["id"], event["enrichment_lease_token"])).fetchone()
+
+    def renew_enrichment(self, event):
+        with self.pool.connection() as conn:
+            return conn.execute("""UPDATE events
+                SET enrichment_lease_until=now()+interval '120 seconds'
+                WHERE id=%s AND enrichment_status='enriching'
+                  AND enrichment_lease_token=%s AND enrichment_lease_until>now()
+                RETURNING id""", (event["id"], event["enrichment_lease_token"])).fetchone()
+
+    def fail_enrichment(self, event, error):
+        with self.pool.connection() as conn:
+            return conn.execute("""UPDATE events SET enrichment_status='failed',
+                enrichment_error=%s,last_error=%s,
+                enrichment_lease_until=NULL,enrichment_lease_token=NULL
+                WHERE id=%s AND enrichment_status='enriching'
+                  AND enrichment_lease_token=%s AND enrichment_lease_until>now()
+                RETURNING id""", (error, error, event["id"], event["enrichment_lease_token"])).fetchone()
+
+    def complete_enrichment(self, event, enrichment):
+        with self.pool.connection() as conn:
+            updated = conn.execute("""UPDATE events SET enrichment_status='completed',
+                enrichment=%s,enriched_at=now(),enrichment_error=NULL,
+                enrichment_lease_until=NULL,enrichment_lease_token=NULL
+                WHERE id=%s AND enrichment_status='enriching'
+                  AND enrichment_lease_token=%s AND enrichment_lease_until>now()
+                RETURNING *""", (Jsonb(enrichment), event["id"],
+                                  event["enrichment_lease_token"])).fetchone()
+            if not updated:
+                return False
+            self.fanout(conn, updated)
+            return True
+
+    def requeue_enrichment(self, event_id):
+        with self.pool.connection() as conn:
+            event = conn.execute("SELECT * FROM events WHERE id=%s FOR UPDATE", (event_id,)).fetchone()
+            if not event:
+                raise KeyError(str(event_id))
+            if event["payload_redacted_at"] is not None:
+                raise Conflict("Retained delivery identity has no enrichable payload")
+            if event["enrichment_status"] != "failed":
+                raise Conflict("Only failed enrichment can be retried")
+            reason = exclusion_reason(conn, event)
+            if reason:
+                raise Conflict("Excluded events cannot be enriched: " + reason)
+            if candidate(event["source"], event["event_type"], event["payload"]) is None:
+                raise Conflict("Event is not eligible for Jira Forms enrichment")
+            row = conn.execute("""UPDATE events SET enrichment_status='pending',
+                enrichment_attempts=0,enrichment_next_at=now(),enrichment_error=NULL,
+                enrichment_lease_until=NULL,enrichment_lease_token=NULL,last_error=NULL
+                WHERE id=%s RETURNING id,enrichment_status""", (event_id,)).fetchone()
+            self.audit(conn, "retry_event_enrichment", str(event_id), {})
+            return row
 
     def execute(self, event_id):
         with self.pool.connection() as conn:
@@ -162,6 +272,8 @@ class Store:
                 raise KeyError(str(event_id))
             if event["payload_redacted_at"] is not None:
                 raise Conflict("Retained delivery identity has no executable payload")
+            if event["enrichment_status"] not in {"not_required", "completed"}:
+                raise Conflict("Event enrichment is not complete")
             reason = exclusion_reason(conn, event)
             if reason:
                 self.mark_excluded(conn, event, reason)

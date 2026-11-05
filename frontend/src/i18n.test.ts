@@ -9,7 +9,7 @@ describe("Language and field mapping", () => {
     expect(t("succeeded")).toBe("Succeeded");
     expect(locale()).toBe("en-GB");
     expect(t("jira.issue.get")).toBe("jira.issue.get");
-    expect(t("issue.fields.status.id")).toBe("issue.fields.status.id");
+    expect(t("payload.issue.fields.status.id")).toBe("payload.issue.fields.status.id");
     setLanguage("es");
     expect(t("Escenarios")).toBe("Reglas");
     expect(t("succeeded")).toBe("Completada");
@@ -26,15 +26,15 @@ describe("Language and field mapping", () => {
   });
   it("offers relative paths for list conditions and current Jira guards", () => {
     const items = [
-      { path: "changelog.items[0].field" },
-      { path: "changelog.items[1].field" },
-      { path: "changelog.items[0].toString" },
-      { path: "issue.fields.status.name" },
+      { path: "payload.changelog.items[0].field" },
+      { path: "payload.changelog.items[1].field" },
+      { path: "payload.changelog.items[0].toString" },
+      { path: "payload.issue.fields.status.name" },
     ];
     expect(
-      relativeSuggestions(items, "changelog.items").map((x) => x.path),
+      relativeSuggestions(items, "payload.changelog.items").map((x) => x.path),
     ).toEqual(["field", "toString"]);
-    expect(relativeSuggestions(items, "issue").map((x) => x.path)).toEqual([
+    expect(relativeSuggestions(items, "payload.issue").map((x) => x.path)).toEqual([
       "fields.status.name",
     ]);
   });
